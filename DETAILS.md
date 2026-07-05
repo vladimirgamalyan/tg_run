@@ -52,6 +52,46 @@ The task is also visible in the GUI: `taskschd.msc` → "Task Scheduler Library"
 - Only the configured Claude Code command is launched — arbitrary commands and
   paths are not supported.
 
+## Folder-name validation
+
+Both `/claude <name>` and the create button run the name through
+`validate_name` (`bot.py`). It normalises first, then rejects: an invalid name
+gets a plain "⛔ Invalid folder name." and never reaches the filesystem. The
+rules:
+
+- surrounding whitespace and double quotes are stripped (`"my folder"` →
+  `my folder`; a space **inside** the name is allowed);
+- rejected: empty, `.`, `..`, or any name containing `..` (traversal);
+- rejected: the Windows-forbidden characters `< > : " / \ | ? *` and control
+  characters (`0x00–0x1F`) — the separators also block nesting;
+- rejected: a **trailing dot** (trailing spaces are already gone from the strip
+  above). Windows silently trims these, so `foo.` would land on disk as `foo` —
+  a mismatch with the name the bot echoed back — hence it refuses instead;
+- finally, the resolved path must be a **direct child** of `base_dir`: exactly
+  one level in, with no escaping out.
+
+## Creating a folder from the button
+
+When `/claude` names a folder that doesn't exist (and `allow_create` is on), the
+reply carries an inline button *"➕ Create \<name\> and launch"*
+(`callback_data = "new:<name>"`, built in `cmd_claude`). The button is **not**
+removed or disabled after use — it stays under the message, so it can be pressed
+again.
+
+Pressing it a second time is **idempotent and safe**. The handler
+(`cb_new` → `create_and_run`) re-checks `target.exists()` before doing anything:
+if the folder was already created by the first press, it does **not** re-create
+it and does **not** launch a second Claude Code terminal — it just replies that
+the folder already exists and suggests `/claude <name>`.
+
+The check-then-create region (`target.exists()` … `target.mkdir(exist_ok=False)`)
+contains no `await`, so on the single-threaded asyncio loop even a rapid
+double-tap is safe: exactly one press creates the folder and launches, the others
+see `exists()` and get the "already exists" reply — no duplicate folder, no
+`FileExistsError`. Edge cases: if the folder was deleted between presses, a later
+press re-creates and launches it; if a non-directory with that name exists, the
+reply says it exists and is not a folder.
+
 ## Logs and error notifications
 
 - Written to `bot.log` next to the script, with **rotation** (up to 1 MB × 5

@@ -139,7 +139,10 @@ def validate_name(raw: str) -> str | None:
     name = raw.strip().strip('"').strip()
     if not name or name in (".", ".."):
         return None
-    if _INVALID.search(name) or ".." in name:
+    # `..` guards against traversal. A trailing "." (or space, already removed
+    # by the strip above) is silently trimmed by Windows — "foo." lands on disk
+    # as "foo", a mismatch with the name we echo back — so reject it too.
+    if _INVALID.search(name) or ".." in name or name.endswith("."):
         return None
     base = config.base_dir
     target = (base / name).resolve()
