@@ -2,11 +2,9 @@
 
 # tg_run — launch Claude Code from Telegram
 
-A Telegram bot for a home PC (Windows 11). On a command from your phone it opens
-a terminal window (Windows Terminal) on the computer with `claude.exe` running
-in the chosen project folder — started with the `--remote-control` flag, so the
-session is controllable from your phone right away. From there you keep working
-remotely straight from your phone via Claude Code's own Remote Control
+Text your home PC (Windows 11) from Telegram to launch Claude Code in any project
+folder. The bot opens a terminal with `claude.exe` running there, already in
+`--remote-control` mode — so you can keep steering the session from your phone
 ([see below](#continue-from-your-phone)).
 
 ## Commands
@@ -31,6 +29,12 @@ Every launched session shows up on your phone automatically: the bot starts
 Claude Code with the `--remote-control` flag (see the `command` in
 `config.toml`), so Remote Control is on per session — no need to enable it
 globally in Claude Code settings or type `/remote-control` by hand.
+
+The launch folder is also marked as trusted automatically, so the session isn't
+blocked by Claude Code's "Do you trust the files in this folder?" dialog — which
+you couldn't answer remotely. Before each launch the bot records the folder as
+trusted in `~/.claude.json` (details in
+[DETAILS.md](DETAILS.md#folder-trust-dialog)).
 
 Requires signing in with a claude.ai account (Pro/Max/Team/Enterprise) via
 `/login` and Claude Code v2.1.51+. Then open the app, tap **Code**, and pick the
