@@ -1,0 +1,16 @@
+# Normalize line endings: store LF in the repo, check out LF everywhere by default.
+* text=auto eol=lf
+
+# Windows-only scripts are checked out with CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Lockfile: text, keep LF.
+uv.lock text eol=lf
+
+# Binary assets — never convert.
+*.png binary
+*.ico binary
+*.jpg binary
+*.gif binary
