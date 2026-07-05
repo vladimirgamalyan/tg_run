@@ -1,3 +1,5 @@
+![tg_run](hero.png)
+
 # tg_run — launch Claude Code from Telegram
 
 A Telegram bot for a home PC (Windows 11). On a command from your phone it opens
