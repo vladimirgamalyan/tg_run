@@ -1,0 +1,24 @@
+[telegram]
+# Your Telegram User IDs (numeric) that are allowed to launch.
+# Find your ID: start the bot and send it the /id command, then put it here.
+# Example: allowed_user_ids = [123456789]
+allowed_user_ids = []
+# Where to send bot error notifications. 0 / unset → first of allowed_user_ids.
+alert_chat_id = 0
+
+[projects]
+# Base directory with projects. Launching is only possible inside it.
+base_dir = "C:/projects"
+# Allow the bot to create new subfolders (/claude_new).
+allow_create = true
+
+[launch]
+# Command to open a terminal with Claude Code. {path} — absolute path to the folder.
+# Windows Terminal (-w new = a separate new window) opens PowerShell 7 (pwsh)
+# in the project folder and runs claude in it. The bot marks the folder as
+# trusted itself (in ~/.claude.json), so the --dangerously-skip-permissions
+# flag is not needed.
+command = 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude'
+
+[logging]
+level = "INFO"
