@@ -196,7 +196,6 @@ HELP_TEXT = (
     "<b>/claude &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder "
     "(offers to create it if missing)\n"
     "<b>/list</b> — list projects\n"
-    "<b>/id</b> — show your Telegram ID\n"
 )
 
 
@@ -219,7 +218,7 @@ class AccessMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             await event.answer("⛔ No access", show_alert=True)
         elif isinstance(event, Message):
-            await event.answer("⛔ No access. Send /id and add your ID to config.toml.")
+            await event.answer("⛔ No access. Add your Telegram ID to config.toml.")
         return None
 
 
@@ -228,17 +227,6 @@ class AccessMiddleware(BaseMiddleware):
 @public_router.message(Command("start", "help", ignore_case=True))
 async def cmd_help(message: Message) -> None:
     await message.answer(HELP_TEXT)
-
-
-@public_router.message(Command("id", ignore_case=True))
-async def cmd_id(message: Message) -> None:
-    user = message.from_user
-    if user is None:
-        return
-    allowed = user.id in config.allowed_user_ids
-    logger.info("WHOAMI user_id=%s username=%s allowed=%s", user.id, user.username, allowed)
-    status = "✅ access granted" if allowed else "⛔ no access — add your ID to config.toml"
-    await message.answer(f"Your Telegram ID: <code>{user.id}</code>\n{status}")
 
 
 # --- protected commands -----------------------------------------------------
@@ -404,8 +392,8 @@ async def send_crash_alert(text: str) -> None:
 async def main() -> None:
     if not config.allowed_user_ids:
         logger.warning(
-            "allowed_user_ids is empty: only the /id command is available. "
-            "Send /id to the bot, put your ID into config.toml and restart."
+            "allowed_user_ids is empty: no user can access the bot. "
+            "Put your Telegram ID into config.toml and restart."
         )
 
     bot = Bot(
@@ -422,10 +410,13 @@ async def main() -> None:
     dp.include_router(public_router)
     dp.include_router(secure_router)
 
-    # In the Telegram command menu we keep only /help: commands that take an
-    # argument (/claude) would be sent from the menu without a folder and be
-    # useless.
-    await bot.set_my_commands([BotCommand(command="help", description="Help and command list")])
+    # Telegram command menu. /claude takes a folder argument; sent from the menu
+    # without one it replies with a usage hint, which is still useful.
+    await bot.set_my_commands([
+        BotCommand(command="claude", description="Launch Claude Code in a project folder"),
+        BotCommand(command="list", description="List projects"),
+        BotCommand(command="help", description="Help and command list"),
+    ])
 
     logger.info("Bot started. base_dir=%s", config.base_dir)
     await dp.start_polling(bot)

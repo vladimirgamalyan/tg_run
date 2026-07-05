@@ -5,7 +5,6 @@ description = "Telegram bot to open a terminal with Claude Code in a chosen proj
 requires-python = ">=3.11"
 dependencies = [
     "aiogram>=3.29.1",
-    "python-dotenv>=1.2.2",
 ]
 
 [tool.uv]

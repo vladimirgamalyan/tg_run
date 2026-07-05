@@ -13,7 +13,6 @@ your phone via Claude Code's own Remote Control ([see below](#continue-from-your
 |---|---|
 | `/claude <folder>` | Open a terminal with Claude Code in a project folder |
 | `/list` | List projects in the base directory |
-| `/id` | Show your Telegram ID (for access setup) |
 
 If the folder is not found, the bot offers a button to create it and launch
 right away.
@@ -44,19 +43,20 @@ Requires [uv](https://docs.astral.sh/uv/) and Windows 11.
 git clone <repo-url> C:\tools\tg_run   # clone into a PERMANENT folder (see note below)
 cd C:\tools\tg_run
 
-copy .env.example .env                  # then edit .env: paste your BOT_TOKEN
-copy config.example.toml config.toml    # then edit config.toml: base_dir, allowed_user_ids
+copy config.example.toml config.toml    # then edit config.toml: bot_token, base_dir, allowed_user_ids
 
 uv sync                                 # create .venv and install dependencies
 uv run bot.py                           # first run in the foreground to check it works
 ```
 
-Get your token from [@BotFather](https://t.me/BotFather). Then send the bot
-`/id` to learn your Telegram ID, put it into `allowed_user_ids` in `config.toml`,
-and restart. Once it works, set up autostart (below).
+Get your token from [@BotFather](https://t.me/BotFather) and put it into
+`bot_token`. Find your Telegram ID (e.g. via
+[@userinfobot](https://t.me/userinfobot)), put it into `allowed_user_ids` in
+`config.toml`, and restart. Once it works, set up autostart
+(below).
 
 > **The bot runs from this folder — keep it in a permanent location.** Nothing
-> is copied elsewhere: the code, `.venv`, `.env`, `config.toml` and `bot.log`
+> is copied elsewhere: the code, `.venv`, `config.toml` and `bot.log`
 > all live here, and the scheduler task points at this path. If you delete or
 > move the folder, the bot stops working (after moving, re-run
 > `install_task.ps1` to re-register the task with the new path). Put it
@@ -64,8 +64,8 @@ and restart. Once it works, set up autostart (below).
 
 ## Configuration
 
-- `.env` — `BOT_TOKEN` (not committed; copy from `.env.example`).
 - `config.toml` (not committed; copy from `config.example.toml`):
+  - `bot_token` — the Telegram bot token from @BotFather;
   - `base_dir` — the base directory with projects (launching is only possible inside it);
   - `allowed_user_ids` — the list of Telegram IDs allowed to launch;
   - `allow_create` — whether new folders may be created;

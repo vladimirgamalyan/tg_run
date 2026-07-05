@@ -5,8 +5,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 # Project root — the folder this file lives in. Config files are resolved
 # relative to it, not to the current working directory, so the bot works no
 # matter where it is launched from.
@@ -25,20 +23,17 @@ class Config:
 
 
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:
-    # Load .env from the project root (falls back to a real BOT_TOKEN env var if
-    # the file is absent). load_dotenv does not override already-set env vars.
-    load_dotenv(_HERE / ".env")
     cfg_path = Path(path) if path is not None else _HERE / "config.toml"
     data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
-
-    token = os.getenv("BOT_TOKEN", "").strip()
-    if not token:
-        raise SystemExit("BOT_TOKEN is not set — put it in .env")
 
     tg = data.get("telegram", {})
     projects = data.get("projects", {})
     launch = data.get("launch", {})
     logging_cfg = data.get("logging", {})
+
+    token = str(tg.get("bot_token", "")).strip()
+    if not token:
+        raise SystemExit("bot_token is not set — put it in config.toml")
 
     base_dir = Path(str(projects.get("base_dir", ""))).expanduser()
     if not base_dir.is_dir():
