@@ -122,6 +122,18 @@ def esc(text: str) -> str:
     return html.escape(text)
 
 
+TG_TEXT_LIMIT = 4000  # conservative; Telegram hard limit is 4096 UTF-16 units
+
+
+def clip(text: str, limit: int = TG_TEXT_LIMIT) -> str:
+    """Truncate PLAIN text to `limit` chars, appending an ellipsis when cut.
+    Pass raw text BEFORE esc()/tag-wrapping so an HTML entity or tag is never
+    split at the boundary."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 def validate_name(raw: str) -> str | None:
     """Return a safe folder name (exactly one level inside base_dir) or None."""
     name = raw.strip().strip('"').strip()
@@ -287,8 +299,23 @@ async def cmd_list(message: Message) -> None:
 
     # Most recent (by folder mtime) on top.
     dirs.sort(key=mtime, reverse=True)
-    text = "📂 Projects (most recent on top):\n" + "\n".join(f"• {esc(p.name)}" for p in dirs)
-    await message.answer(text[:4000])
+    # Build line by line so truncation never falls inside an escaped HTML entity
+    # (a name with & < > " ' would otherwise break Telegram's HTML parsing).
+    header = "📂 Projects (most recent on top):"
+    footer_reserve = 64  # room for the "… and N more" marker
+    lines = [header]
+    length = len(header)
+    shown = 0
+    for p in dirs:
+        line = f"• {esc(p.name)}"
+        if length + len(line) + 1 > TG_TEXT_LIMIT - footer_reserve:
+            break
+        lines.append(line)
+        length += len(line) + 1
+        shown += 1
+    if shown < len(dirs):
+        lines.append(f"… and {len(dirs) - shown} more ({shown} shown)")
+    await message.answer(clip("\n".join(lines)))
 
 
 # Catches everything that didn't match the commands above (registered last, so
@@ -361,7 +388,7 @@ async def notify_admin(bot: Bot, text: str) -> None:
         return
     _last_alert_ts = now
     try:
-        await bot.send_message(chat_id, text[:4000])
+        await bot.send_message(chat_id, clip(text))
     except Exception:
         logger.exception("Failed to send admin notification")
 
@@ -371,7 +398,8 @@ async def on_error(event: ErrorEvent, bot: Bot) -> None:
     sends an alert to the admin. Returning here does not kill polling — the bot
     keeps running."""
     logger.error("Error while handling update", exc_info=event.exception)
-    await notify_admin(bot, f"⚠️ Bot error:\n<code>{esc(repr(event.exception))}</code>")
+    detail = clip(repr(event.exception), TG_TEXT_LIMIT - 64)  # room for the wrapper
+    await notify_admin(bot, f"⚠️ Bot error:\n<code>{esc(detail)}</code>")
 
 
 async def send_crash_alert(text: str) -> None:
@@ -382,7 +410,7 @@ async def send_crash_alert(text: str) -> None:
         return
     bot = Bot(config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
-        await bot.send_message(chat_id, text[:4000])
+        await bot.send_message(chat_id, clip(text))
     finally:
         await bot.session.close()
 
