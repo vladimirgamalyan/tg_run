@@ -85,6 +85,7 @@ Manage it:
 ```powershell
 Start-ScheduledTask tg_run                                      # start
 Stop-ScheduledTask  tg_run                                      # stop
+powershell -ExecutionPolicy Bypass -File .\restart_task.ps1     # restart (pick up a code change)
 powershell -ExecutionPolicy Bypass -File .\uninstall_task.ps1   # remove
 ```
 
