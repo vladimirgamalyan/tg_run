@@ -7,8 +7,9 @@
   (session 0) would launch them invisibly. Therefore:
     - an "At log on" trigger for the current user;
     - LogonType Interactive ("run only when the user is logged on");
-    - a scheduler RestartCount (3x, 1 min) kept only as a fallback: it does not
-      fire on this system, so the supervisor does the real restarting (see below);
+    - a scheduler RestartCount (3x, 1 min) as a best-effort restart fallback:
+      note it does not reliably fire on this system, so a crash generally needs
+      a manual Start-ScheduledTask;
     - no run-time limit; console window hidden (pythonw.exe).
 
   Run (from the project folder):
@@ -24,11 +25,10 @@ $ErrorActionPreference = 'Stop'
 $TaskName   = 'tg_run'
 $ProjectDir = $PSScriptRoot
 $VenvCfg    = Join-Path $ProjectDir '.venv\pyvenv.cfg'
-# The task launches the SUPERVISOR, which in turn keeps bot.py alive and
-# restarts it on crash. The scheduler's built-in "Restart on failure" does not
-# fire on this system even on a non-zero exit code, so the supervisor does the
-# restarting.
-$Script     = 'supervisor.py'
+# The task launches bot.py directly. There is no supervisor: the bot runs
+# reliably on its own, and the scheduler's built-in "Restart on failure" (set
+# below) is the only, best-effort restart mechanism.
+$Script     = 'bot.py'
 $Account    = "$env:USERDOMAIN\$env:USERNAME"
 
 if (-not (Test-Path $VenvCfg)) {
@@ -49,7 +49,7 @@ if (-not (Test-Path (Join-Path $ProjectDir $Script))) {
     Write-Error "$Script not found in $ProjectDir"
 }
 
-$action = New-ScheduledTaskAction -Execute $Pythonw -Argument $Script -WorkingDirectory $ProjectDir
+$action = New-ScheduledTaskAction -Execute $Pythonw -Argument "$Script --hidden" -WorkingDirectory $ProjectDir
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
 

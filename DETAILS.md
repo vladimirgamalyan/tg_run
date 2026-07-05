@@ -14,15 +14,12 @@ The script registers the `tg_run` task and starts it immediately. What it does:
 
 - **starts at log on** of the current user, in their interactive session
   (`wt.exe` windows are visible on screen);
-- launches the **supervisor** (`supervisor.py`), which keeps `bot.py` alive and
-  **restarts it on crash** — up to 3 times, with a 15 s pause between attempts.
-  If the bot ran for ≥ 60 s before crashing, the counter is reset (isolated
-  failures don't accumulate). Once those 3 attempts are exhausted (the bot keeps
-  crashing fast), the supervisor writes `CRITICAL` to the log and stops —
-  protection against an infinite loop on an unrecoverable
-  error (bad token, no `base_dir`). The scheduler's built-in "Restart on
-  failure" is **not used**: on this system it does not fire even on a non-zero
-  exit code;
+- launches **`bot.py`** directly (with `--hidden`) — there is no separate
+  supervisor process. The scheduler's built-in "Restart on failure"
+  (`RestartCount` 3×, 1 min) is configured as a best-effort fallback, but on
+  this system it does **not** reliably fire even on a non-zero exit code, so
+  treat a crash as needing a manual restart (`Start-ScheduledTask tg_run` —
+  check the cause in `bot.log` first);
 - launches via the **base GUI `pythonw.exe`** (its path is taken from
   `.venv\pyvenv.cfg`, the `home` key) — no console is created, no window. The
   venv `.venv\Scripts\pythonw.exe` won't do: on Windows 11 it still opens a
@@ -30,12 +27,8 @@ The script registers the `tg_run` task and starts it immediately. What it does:
   (`site.addsitedir` in `bot.py`);
 - with no run-time limit.
 
-In the task manager / process list you'll see two `pythonw.exe` processes: the
-supervisor (`supervisor.py`) and its child bot (`bot.py --hidden`) — this is
-normal, only the bot does the polling. If the supervisor gave up after a series
-of crashes — fix the cause from the log and start the task again:
-`Start-ScheduledTask tg_run`. The restart parameters (number of attempts,
-pauses) are constants at the top of `supervisor.py`.
+In the task manager / process list you'll see a single `pythonw.exe` process
+running `bot.py --hidden` — that one process does the polling.
 
 ## Managing the task
 
