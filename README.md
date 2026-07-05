@@ -4,7 +4,8 @@
 
 A Telegram bot for a home PC (Windows 11). On a command from your phone it opens
 a terminal window (Windows Terminal) on the computer with `claude.exe` running
-in the chosen project folder. Nothing more: this is not a remote console.
+in the chosen project folder. From there you keep working remotely straight from
+your phone via Claude Code's own Remote Control ([see below](#continue-from-your-phone)).
 
 ## Commands
 
@@ -17,6 +18,24 @@ in the chosen project folder. Nothing more: this is not a remote console.
 
 If the folder is not found, the bot offers a button to create it and launch
 right away.
+
+## Continue from your phone
+
+Once the bot has opened Claude Code on the PC, you can keep steering that same
+session from the [Claude mobile app](https://claude.ai/download) (or
+[claude.ai/code](https://claude.ai/code)) via Claude Code's
+[Remote Control](https://code.claude.com/docs/en/remote-control). Claude keeps
+running locally — the phone is just a window into the session.
+
+For every launched session to show up on your phone automatically, run `/config`
+inside Claude Code once and set **Enable Remote Control for all sessions** to
+`true` (or Desktop app: **Settings → Claude Code → Enable remote control by
+default**). Without it, you'd have to type `/remote-control` in each session by
+hand.
+
+Requires signing in with a claude.ai account (Pro/Max/Team/Enterprise) via
+`/login` and Claude Code v2.1.51+. Then open the app, tap **Code**, and pick the
+session from the list.
 
 ## Quick start
 
