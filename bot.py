@@ -193,8 +193,8 @@ def launch_claude(path: Path) -> None:
 
 HELP_TEXT = (
     "🤖 <b>Claude Code launcher</b>\n\n"
-    "<b>/claude &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder\n"
-    "<b>/claude_new &lt;folder&gt;</b> — create a new folder and launch\n"
+    "<b>/claude &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder "
+    "(offers to create it if missing)\n"
     "<b>/list</b> — list projects\n"
     "<b>/id</b> — show your Telegram ID\n"
 )
@@ -271,26 +271,13 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
             has_buttons = True
             lines.append("\nCreate a new folder and launch?")
         else:
-            lines.append(f"\nTo create: <code>/claude_new {esc(safe)}</code>")
+            lines.append("\nName is too long to create via the button.")
     builder.adjust(1)
 
     await message.answer(
         "\n".join(lines),
         reply_markup=builder.as_markup() if has_buttons else None,
     )
-
-
-@secure_router.message(Command("claude_new", ignore_case=True))
-async def cmd_claude_new(message: Message, command: CommandObject) -> None:
-    raw = (command.args or "").strip()
-    if not raw:
-        await message.answer("Usage: <code>/claude_new folder_name</code>")
-        return
-    safe = validate_name(raw)
-    if safe is None:
-        await message.answer("⛔ Invalid folder name.")
-        return
-    await create_and_run(message, safe)
 
 
 @secure_router.message(Command("list", ignore_case=True))
@@ -436,8 +423,8 @@ async def main() -> None:
     dp.include_router(secure_router)
 
     # In the Telegram command menu we keep only /help: commands that take an
-    # argument (/claude, /claude_new) would be sent from the menu without a
-    # folder and be useless.
+    # argument (/claude) would be sent from the menu without a folder and be
+    # useless.
     await bot.set_my_commands([BotCommand(command="help", description="Help and command list")])
 
     logger.info("Bot started. base_dir=%s", config.base_dir)

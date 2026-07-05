@@ -12,7 +12,6 @@ your phone via Claude Code's own Remote Control ([see below](#continue-from-your
 | Command | Action |
 |---|---|
 | `/claude <folder>` | Open a terminal with Claude Code in a project folder |
-| `/claude_new <folder>` | Create a new folder and launch in it |
 | `/list` | List projects in the base directory |
 | `/id` | Show your Telegram ID (for access setup) |
 

@@ -9,7 +9,8 @@ alert_chat_id = 0
 [projects]
 # Base directory with projects. Launching is only possible inside it.
 base_dir = "C:/projects"
-# Allow the bot to create new subfolders (/claude_new).
+# Allow the bot to create new subfolders (via the "create and launch" button
+# shown when /claude targets a missing folder).
 allow_create = true
 
 [launch]
