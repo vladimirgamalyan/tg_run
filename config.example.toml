@@ -20,8 +20,9 @@ allow_create = true
 # Windows Terminal (-w new = a separate new window) opens PowerShell 7 (pwsh)
 # in the project folder and runs claude in it. The bot marks the folder as
 # trusted itself (in ~/.claude.json), so the --dangerously-skip-permissions
-# flag is not needed.
-command = 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude'
+# flag is not needed. --remote-control makes each session controllable from the
+# phone without enabling Remote Control globally in Claude Code settings.
+command = 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control'
 
 [logging]
 level = "INFO"

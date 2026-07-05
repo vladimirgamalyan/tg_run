@@ -49,6 +49,6 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         alert_chat_id=alert_chat_id,
         base_dir=base_dir.resolve(),
         allow_create=bool(projects.get("allow_create", True)),
-        launch_command=str(launch.get("command", 'wt.exe -d "{path}" claude.exe')),
+        launch_command=str(launch.get("command", 'wt.exe -d "{path}" claude.exe --remote-control')),
         log_level=str(logging_cfg.get("level", "INFO")),
     )

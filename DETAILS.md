@@ -78,6 +78,9 @@ The task is also visible in the GUI: `taskschd.msc` → "Task Scheduler Library"
 - The terminal opens in **PowerShell 7** (`pwsh`); claude runs inside it.
 - `-NoExit` keeps the window open after `claude` exits (you can see the output
   and run it again). Remove `-NoExit` if you want the window to close.
+- `--remote-control` is passed to `claude` (pwsh's `-Command` appends trailing
+  tokens to the command it runs), enabling Remote Control for that session
+  regardless of the global setting.
 
 ## Folder trust dialog
 

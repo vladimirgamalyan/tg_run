@@ -25,11 +25,10 @@ session from the [Claude mobile app](https://claude.ai/download) (or
 [Remote Control](https://code.claude.com/docs/en/remote-control). Claude keeps
 running locally — the phone is just a window into the session.
 
-For every launched session to show up on your phone automatically, run `/config`
-inside Claude Code once and set **Enable Remote Control for all sessions** to
-`true` (or Desktop app: **Settings → Claude Code → Enable remote control by
-default**). Without it, you'd have to type `/remote-control` in each session by
-hand.
+Every launched session shows up on your phone automatically: the bot starts
+Claude Code with the `--remote-control` flag (see the `command` in
+`config.toml`), so Remote Control is on per session — no need to enable it
+globally in Claude Code settings or type `/remote-control` by hand.
 
 Requires signing in with a claude.ai account (Pro/Max/Team/Enterprise) via
 `/login` and Claude Code v2.1.51+. Then open the app, tap **Code**, and pick the
