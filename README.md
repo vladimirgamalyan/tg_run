@@ -4,8 +4,10 @@
 
 A Telegram bot for a home PC (Windows 11). On a command from your phone it opens
 a terminal window (Windows Terminal) on the computer with `claude.exe` running
-in the chosen project folder. From there you keep working remotely straight from
-your phone via Claude Code's own Remote Control ([see below](#continue-from-your-phone)).
+in the chosen project folder — started with the `--remote-control` flag, so the
+session is controllable from your phone right away. From there you keep working
+remotely straight from your phone via Claude Code's own Remote Control
+([see below](#continue-from-your-phone)).
 
 ## Commands
 
