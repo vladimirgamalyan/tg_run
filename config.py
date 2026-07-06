@@ -16,7 +16,7 @@ class Config:
     bot_token: str
     allowed_user_ids: frozenset[int]
     alert_chat_id: int
-    base_dir: Path
+    base_dirs: tuple[Path, ...]
     allow_create: bool
     launch_command: str
     log_level: str
@@ -35,9 +35,28 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     if not token:
         raise SystemExit("bot_token is not set — put it in config.toml")
 
-    base_dir = Path(str(projects.get("base_dir", ""))).expanduser()
-    if not base_dir.is_dir():
-        raise SystemExit(f"base_dir does not exist or is not a folder: {base_dir}")
+    # `base_dirs` is a list of project roots; a legacy scalar `base_dir` is
+    # still accepted so existing configs keep working after an update.
+    raw_dirs = projects.get("base_dirs")
+    if raw_dirs is None:
+        raw_dirs = [projects.get("base_dir", "")]
+    if not raw_dirs:
+        raise SystemExit("base_dirs is empty — put at least one folder in config.toml")
+
+    base_dirs: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_dirs:
+        if not str(raw).strip():
+            raise SystemExit("base_dirs entry is empty — put a folder path in config.toml")
+        base_dir = Path(str(raw)).expanduser()
+        if not base_dir.is_dir():
+            raise SystemExit(f"base_dirs entry does not exist or is not a folder: {base_dir}")
+        base_dir = base_dir.resolve()
+        key = os.path.normcase(str(base_dir))
+        if key in seen:
+            continue
+        seen.add(key)
+        base_dirs.append(base_dir)
 
     allowed_list = [int(x) for x in tg.get("allowed_user_ids", [])]
     # Where to send error alerts: explicit alert_chat_id or the first whitelist entry.
@@ -47,7 +66,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         bot_token=token,
         allowed_user_ids=frozenset(allowed_list),
         alert_chat_id=alert_chat_id,
-        base_dir=base_dir.resolve(),
+        base_dirs=tuple(base_dirs),
         allow_create=bool(projects.get("allow_create", True)),
         launch_command=str(launch.get("command", 'wt.exe -d "{path}" claude.exe --remote-control')),
         log_level=str(logging_cfg.get("level", "INFO")),

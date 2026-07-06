@@ -111,7 +111,10 @@ public_router = Router(name="public")
 secure_router = Router(name="secure")
 
 # Characters not allowed in Windows folder names, plus control characters.
-_INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# `/` and `\` are excluded here: they separate path segments and are handled
+# by validate_path; every individual segment must not contain them anyway
+# because splitting removes them.
+_INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
 
 # Maximum callback_data length in Telegram — 64 bytes.
 _CB_LIMIT = 64
@@ -134,22 +137,34 @@ def clip(text: str, limit: int = TG_TEXT_LIMIT) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def validate_name(raw: str) -> str | None:
-    """Return a safe folder name (exactly one level inside base_dir) or None."""
-    name = raw.strip().strip('"').strip()
-    if not name or name in (".", ".."):
+def validate_path(raw: str) -> str | None:
+    """Return a safe relative path ("name" or "group/name", normalized to
+    forward slashes) or None."""
+    path = raw.strip().strip('"').strip().replace("\\", "/")
+    # An empty segment rejects a leading/trailing slash, "a//b", and UNC paths.
+    segments = path.split("/") if path else []
+    if not segments:
         return None
-    # `..` guards against traversal. A trailing "." (or space, already removed
-    # by the strip above) is silently trimmed by Windows — "foo." lands on disk
-    # as "foo", a mismatch with the name we echo back — so reject it too.
-    if _INVALID.search(name) or ".." in name or name.endswith("."):
+    for seg in segments:
+        if not seg or seg in (".", ".."):
+            return None
+        # `..` guards against traversal. A trailing "." (or space, already
+        # removed by the strip above for the outer segments) is silently
+        # trimmed by Windows — "foo." lands on disk as "foo", a mismatch with
+        # the name we echo back — so reject it too. `:` in _INVALID also
+        # rejects drive-absolute paths like "C:/x".
+        if _INVALID.search(seg) or ".." in seg or seg != seg.strip() or seg.endswith("."):
+            return None
+    return "/".join(segments)
+
+
+def resolve_under(root: Path, relpath: str) -> Path | None:
+    """Resolve `relpath` inside `root`; None if it escapes the root (a safety
+    net on top of the segment checks, e.g. against symlinks/junctions)."""
+    target = (root / relpath).resolve()
+    if target == root or not target.is_relative_to(root):
         return None
-    base = config.base_dir
-    target = (base / name).resolve()
-    # Must be a direct child of base_dir: no nesting and no escaping outside.
-    if target.parent != base:
-        return None
-    return name
+    return target
 
 
 # Claude Code settings file, where the list of trusted folders is stored.
@@ -209,8 +224,9 @@ def launch_claude(path: Path) -> None:
 HELP_TEXT = (
     "🤖 <b>Claude Code launcher</b>\n\n"
     "<b>/claude &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder "
-    "(offers to create it if missing)\n"
-    "<b>/list</b> — list projects\n"
+    "(offers to create it if missing). Nested folders work too: "
+    "<code>/claude group/proj</code>\n"
+    "<b>/list [folder]</b> — list projects (or the contents of a subfolder)\n"
 )
 
 
@@ -252,29 +268,69 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
     if not raw:
         await message.answer("Usage: <code>/claude folder_name</code>")
         return
-    safe = validate_name(raw)
+    safe = validate_path(raw)
     if safe is None:
         await message.answer("⛔ Invalid folder name.")
         return
 
-    target = config.base_dir / safe
-    if target.is_dir():
-        launch_claude(target)
+    matches = [
+        (i, target)
+        for i, root in enumerate(config.base_dirs)
+        if (target := resolve_under(root, safe)) is not None and target.is_dir()
+    ]
+
+    if len(matches) == 1:
+        launch_claude(matches[0][1])
         await message.answer(f"▶️ Launching Claude Code in <b>{esc(safe)}</b>")
         return
 
-    # Folder not found — offer to create it.
+    if matches:
+        # The same relative path exists in several roots — ask which one.
+        builder = InlineKeyboardBuilder()
+        has_buttons = False
+        for i, _target in matches:
+            cb = f"run:{i}:{safe}"
+            if len(cb.encode()) <= _CB_LIMIT:
+                builder.button(text=f"▶️ {config.base_dirs[i].as_posix()}", callback_data=cb)
+                has_buttons = True
+        builder.adjust(1)
+        if has_buttons:
+            await message.answer(
+                f"📁 <b>{esc(safe)}</b> exists in several places. Where to launch?",
+                reply_markup=builder.as_markup(),
+            )
+        else:
+            await message.answer("⛔ Name is too long for the selection buttons.")
+        return
+
+    # Folder not found — offer to create it, but only in roots where the
+    # parent folder already exists (no mkdir -p: a typo in the group name must
+    # not silently create a whole new tree).
     lines = [f"📁 Folder <b>{esc(safe)}</b> not found."]
     builder = InlineKeyboardBuilder()
     has_buttons = False
     if config.allow_create:
-        cb = f"new:{safe}"
-        if len(cb.encode()) <= _CB_LIMIT:
-            builder.button(text=f"➕ Create \"{safe}\" and launch", callback_data=cb)
+        creatable = [
+            i
+            for i, root in enumerate(config.base_dirs)
+            if (target := resolve_under(root, safe)) is not None and target.parent.is_dir()
+        ]
+        cb_too_long = False
+        for i in creatable:
+            cb = f"new:{i}:{safe}"
+            if len(cb.encode()) > _CB_LIMIT:
+                cb_too_long = True
+                continue
+            builder.button(
+                text=f"➕ Create in {config.base_dirs[i].as_posix()}", callback_data=cb
+            )
             has_buttons = True
+        if has_buttons:
             lines.append("\nCreate a new folder and launch?")
-        else:
+        elif cb_too_long:
             lines.append("\nName is too long to create via the button.")
+        elif "/" in safe:
+            lines.append("\nThe parent folder does not exist either — create it first.")
     builder.adjust(1)
 
     await message.answer(
@@ -284,15 +340,14 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
 
 
 @secure_router.message(Command("list", ignore_case=True))
-async def cmd_list(message: Message) -> None:
-    try:
-        dirs = [p for p in config.base_dir.iterdir() if p.is_dir()]
-    except OSError as e:
-        await message.answer(f"⛔ Error reading folder: {esc(str(e))}")
-        return
-    if not dirs:
-        await message.answer("No projects yet.")
-        return
+async def cmd_list(message: Message, command: CommandObject) -> None:
+    raw = (command.args or "").strip()
+    sub: str | None = None
+    if raw:
+        sub = validate_path(raw)
+        if sub is None:
+            await message.answer("⛔ Invalid folder name.")
+            return
 
     def mtime(p: Path) -> float:
         try:
@@ -300,24 +355,64 @@ async def cmd_list(message: Message) -> None:
         except OSError:
             return 0.0
 
-    # Most recent (by folder mtime) on top.
-    dirs.sort(key=mtime, reverse=True)
+    # One group per root (or per root containing the requested subfolder):
+    # a header with the folder path plus its subfolders, most recent on top.
+    groups: list[tuple[str, list[Path] | OSError]] = []
+    for root in config.base_dirs:
+        folder = root if sub is None else resolve_under(root, sub)
+        if folder is None or not folder.is_dir():
+            continue
+        header = f"📂 {folder.as_posix()}"
+        try:
+            dirs = [p for p in folder.iterdir() if p.is_dir()]
+        except OSError as e:
+            groups.append((header, e))
+            continue
+        dirs.sort(key=mtime, reverse=True)
+        groups.append((header, dirs))
+
+    if sub is not None and not groups:
+        await message.answer(f"📁 Folder <b>{esc(sub)}</b> not found.")
+        return
+    if all(isinstance(dirs, list) and not dirs for _, dirs in groups):
+        await message.answer("No projects yet.")
+        return
+
     # Build line by line so truncation never falls inside an escaped HTML entity
     # (a name with & < > " ' would otherwise break Telegram's HTML parsing).
-    header = "📂 Projects (most recent on top):"
     footer_reserve = 64  # room for the "… and N more" marker
-    lines = [header]
-    length = len(header)
+    limit = TG_TEXT_LIMIT - footer_reserve
+    lines: list[str] = []
+    length = 0
     shown = 0
-    for p in dirs:
-        line = f"• {esc(p.name)}"
-        if length + len(line) + 1 > TG_TEXT_LIMIT - footer_reserve:
-            break
+    hidden = 0
+    out_of_room = False
+
+    def try_add(line: str) -> bool:
+        nonlocal length
+        if out_of_room or length + len(line) + 1 > limit:
+            return False
         lines.append(line)
         length += len(line) + 1
-        shown += 1
-    if shown < len(dirs):
-        lines.append(f"… and {len(dirs) - shown} more ({shown} shown)")
+        return True
+
+    for gi, (header, dirs) in enumerate(groups):
+        if gi > 0 and not try_add(""):
+            out_of_room = True
+        elif not try_add(header):
+            out_of_room = True
+        elif isinstance(dirs, OSError):
+            try_add(f"• ⛔ error: {esc(str(dirs))}")
+        if isinstance(dirs, OSError):
+            continue
+        for p in dirs:
+            if try_add(f"• {esc(p.name)}"):
+                shown += 1
+            else:
+                out_of_room = True
+                hidden += 1
+    if hidden:
+        lines.append(f"… and {hidden} more ({shown} shown)")
     await message.answer(clip("\n".join(lines)))
 
 
@@ -336,24 +431,58 @@ async def cmd_fallback(message: Message) -> None:
 
 # --- button handlers --------------------------------------------------------
 
+def parse_root_callback(data: str) -> tuple[Path, str] | None:
+    """Parse "<prefix>:<root index>:<relative path>" callback data; None if the
+    index or path is invalid (e.g. a stale button from an older bot version)."""
+    parts = data.split(":", 2)
+    if len(parts) != 3 or not parts[1].isdigit():
+        return None
+    idx = int(parts[1])
+    if idx >= len(config.base_dirs):
+        return None
+    safe = validate_path(parts[2])
+    if safe is None:
+        return None
+    return config.base_dirs[idx], safe
+
+
+@secure_router.callback_query(F.data.startswith("run:"))
+async def cb_run(callback: CallbackQuery) -> None:
+    parsed = parse_root_callback(callback.data or "")
+    if parsed is None:
+        await callback.answer("Invalid button", show_alert=True)
+        return
+    root, safe = parsed
+    target = resolve_under(root, safe)
+    if target is None or not target.is_dir():
+        await callback.answer("Folder no longer exists", show_alert=True)
+        return
+    await callback.answer("Launching…")
+    launch_claude(target)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            f"▶️ Launching Claude Code in <b>{esc(safe)}</b> ({esc(root.as_posix())})"
+        )
+
+
 @secure_router.callback_query(F.data.startswith("new:"))
 async def cb_new(callback: CallbackQuery) -> None:
-    safe = validate_name((callback.data or "").split(":", 1)[1])
-    if safe is None:
-        await callback.answer("Invalid name", show_alert=True)
+    parsed = parse_root_callback(callback.data or "")
+    if parsed is None:
+        await callback.answer("Invalid button", show_alert=True)
         return
     await callback.answer("Creating…")
     if isinstance(callback.message, Message):
-        await create_and_run(callback.message, safe)
+        await create_and_run(callback.message, *parsed)
 
 
 # --- shared create-and-launch logic -----------------------------------------
 
-async def create_and_run(message: Message, safe: str) -> None:
+async def create_and_run(message: Message, root: Path, safe: str) -> None:
     if not config.allow_create:
         await message.answer("⛔ Folder creation is disabled in the config.")
         return
-    target = config.base_dir / safe
+    target = root / safe
     if target.exists():
         if target.is_dir():
             await message.answer(
@@ -449,7 +578,7 @@ async def main() -> None:
         BotCommand(command="help", description="Help and command list"),
     ])
 
-    logger.info("Bot started. base_dir=%s", config.base_dir)
+    logger.info("Bot started. base_dirs=%s", [p.as_posix() for p in config.base_dirs])
     await dp.start_polling(bot)
 
 

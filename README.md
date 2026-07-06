@@ -12,10 +12,13 @@ folder. The bot opens a terminal with `claude.exe` running there, already in
 | Command | Action |
 |---|---|
 | `/claude <folder>` | Open a terminal with Claude Code in a project folder |
-| `/list` | List projects in the base directory |
+| `/list [folder]` | List projects (or the contents of a subfolder) |
 
-If the folder is not found, the bot offers a button to create it and launch
-right away.
+Projects can live in several root directories (`base_dirs` in `config.toml`) —
+for example, on different drives. `<folder>` is a folder name or a relative
+path like `group/proj`, so nested project folders work too. If the name exists
+in several roots, the bot asks where to launch; if it is not found, the bot
+offers buttons to create it and launch right away.
 
 ## Continue from your phone
 
@@ -48,7 +51,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Windows 11.
 git clone <repo-url> C:\tools\tg_run   # clone into a PERMANENT folder (see note below)
 cd C:\tools\tg_run
 
-copy config.example.toml config.toml    # then edit config.toml: bot_token, base_dir, allowed_user_ids
+copy config.example.toml config.toml    # then edit config.toml: bot_token, base_dirs, allowed_user_ids
 
 uv sync                                 # create .venv and install dependencies
 uv run bot.py                           # first run in the foreground to check it works
@@ -71,7 +74,7 @@ Get your token from [@BotFather](https://t.me/BotFather) and put it into
 
 - `config.toml` (not committed; copy from `config.example.toml`):
   - `bot_token` — the Telegram bot token from @BotFather;
-  - `base_dir` — the base directory with projects (launching is only possible inside it);
+  - `base_dirs` — the list of project root directories (launching is only possible inside them);
   - `allowed_user_ids` — the list of Telegram IDs allowed to launch;
   - `allow_create` — whether new folders may be created;
   - `command` — the terminal launch command (`{path}` is substituted).

@@ -9,8 +9,10 @@ allowed_user_ids = []
 alert_chat_id = 0
 
 [projects]
-# Base directory with projects. Launching is only possible inside it.
-base_dir = "C:/projects"
+# Directories with projects. Launching is only possible inside them.
+# /claude accepts a folder name or a relative path like group/proj.
+# Example: base_dirs = ["C:/projects", "K:/work"]
+base_dirs = ["C:/projects"]
 # Allow the bot to create new subfolders (via the "create and launch" button
 # shown when /claude targets a missing folder).
 allow_create = true

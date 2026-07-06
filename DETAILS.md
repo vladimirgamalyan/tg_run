@@ -47,36 +47,49 @@ The task is also visible in the GUI: `taskschd.msc` → "Task Scheduler Library"
 ## Security
 
 - Access by a Telegram User ID whitelist only.
-- Launching is only possible inside `base_dir`; folder names are validated,
-  escaping the base directory (`..`, absolute paths, separators) is forbidden.
+- Launching is only possible inside one of the configured `base_dirs`; folder
+  paths are validated per segment, escaping the roots (`..`, absolute paths,
+  UNC paths) is forbidden.
 - Only the configured Claude Code command is launched — arbitrary commands and
   paths are not supported.
 
-## Folder-name validation
+## Folder-path validation
 
-Both `/claude <name>` and the create button run the name through
-`validate_name` (`bot.py`). It normalises first, then rejects: an invalid name
+Both `/claude <folder>` and the inline buttons run the input through
+`validate_path` (`bot.py`). It normalises first, then rejects: an invalid path
 gets a plain "⛔ Invalid folder name." and never reaches the filesystem. The
 rules:
 
 - surrounding whitespace and double quotes are stripped (`"my folder"` →
-  `my folder`; a space **inside** the name is allowed);
-- rejected: empty, `.`, `..`, or any name containing `..` (traversal);
-- rejected: the Windows-forbidden characters `< > : " / \ | ? *` and control
-  characters (`0x00–0x1F`) — the separators also block nesting;
-- rejected: a **trailing dot** (trailing spaces are already gone from the strip
-  above). Windows silently trims these, so `foo.` would land on disk as `foo` —
-  a mismatch with the name the bot echoed back — hence it refuses instead;
-- finally, the resolved path must be a **direct child** of `base_dir`: exactly
-  one level in, with no escaping out.
+  `my folder`; a space **inside** a name is allowed); backslashes are
+  normalised to `/`, then the path is split into segments and each segment is
+  checked on its own;
+- rejected: an empty path, a leading or trailing slash and empty segments
+  (`a//b`) — this also kills absolute and UNC paths;
+- rejected segments: `.`, `..`, or anything containing `..` (traversal);
+- rejected: the Windows-forbidden characters `< > : " | ? *` and control
+  characters (`0x00–0x1F`) — `:` also blocks drive-absolute paths like `C:/x`;
+- rejected: a segment with leading/trailing whitespace or a **trailing dot**.
+  Windows silently trims these, so `foo.` would land on disk as `foo` — a
+  mismatch with the name the bot echoed back — hence it refuses instead;
+- finally, the resolved path must stay **strictly inside the root**
+  (`resolve()` + `is_relative_to`, see `resolve_under`) — a safety net on top
+  of the segment checks, e.g. against symlinks/junctions pointing outside.
+
+When the same relative path exists in several roots, `/claude` replies with one
+button per root (`callback_data = "run:<root index>:<path>"`) and launches in
+the one you pick.
 
 ## Creating a folder from the button
 
 When `/claude` names a folder that doesn't exist (and `allow_create` is on), the
-reply carries an inline button *"➕ Create \<name\> and launch"*
-(`callback_data = "new:<name>"`, built in `cmd_claude`). The button is **not**
-removed or disabled after use — it stays under the message, so it can be pressed
-again.
+reply carries an inline button *"➕ Create in \<root\>"* per root
+(`callback_data = "new:<root index>:<path>"`, built in `cmd_claude`). A button
+is only offered for roots where the **parent** of the path already exists:
+`experiments/newproj` needs an existing `experiments`. Missing chains are never
+created (`mkdir` without `parents`), so a typo in the group name can't silently
+grow a whole new tree. The button is **not** removed or disabled after use — it
+stays under the message, so it can be pressed again.
 
 Pressing it a second time is **idempotent and safe**. The handler
 (`cb_new` → `create_and_run`) re-checks `target.exists()` before doing anything:
