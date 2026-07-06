@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,24 @@ from pathlib import Path
 # relative to it, not to the current working directory, so the bot works no
 # matter where it is launched from.
 _HERE = Path(__file__).resolve().parent
+
+# Default launch command per platform, used when `command` is absent from
+# config.toml. macOS: `quoted form of` asks AppleScript to shell-quote {path}
+# safely (spaces, $, backticks, ...) before Terminal's own shell sees it; the
+# outer `osascript -e '...'` wrapping relies on {path} never containing a
+# literal `'`, which validate_path in bot.py rejects on macOS for exactly this
+# reason. `do script` runs before `activate` so that on a cold start (Terminal
+# not yet running) a single window opens — leading with `activate` would launch
+# Terminal with its own default window and `do script` would then open a second.
+_DEFAULT_LAUNCH_COMMANDS = {
+    "win32": 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control',
+    "darwin": (
+        "osascript "
+        "-e 'tell application \"Terminal\" to do script "
+        '"cd " & quoted form of "{path}" & " && claude --remote-control"\' '
+        "-e 'tell application \"Terminal\" to activate'"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +75,16 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         if not base_dir.is_dir():
             raise SystemExit(f"base_dirs entry does not exist or is not a folder: {base_dir}")
         base_dir = base_dir.resolve()
+        # On macOS the default launch command embeds this base_dir prefix into a
+        # single-quoted `osascript -e '...'` argument and an AppleScript string
+        # literal; a ' " or \ in the path would break that quoting and the launch
+        # would silently fail. validate_path guards the relative segment typed
+        # over Telegram, but not this prefix — so reject it here.
+        if sys.platform == "darwin" and any(c in str(base_dir) for c in "'\"\\"):
+            raise SystemExit(
+                "base_dirs entry contains a character (' \" \\) that breaks the "
+                f"macOS launch command: {base_dir}"
+            )
         key = os.path.normcase(str(base_dir))
         if key in seen:
             continue
@@ -70,15 +99,22 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     except (TypeError, ValueError):
         raise SystemExit("allowed_user_ids entries must be numeric Telegram IDs")
 
+    # Fail fast on a platform with no built-in default (e.g. Linux) rather than
+    # replying "Launching..." and letting the shell error out on wt.exe later.
+    launch_command = launch.get("command")
+    if launch_command is None:
+        launch_command = _DEFAULT_LAUNCH_COMMANDS.get(sys.platform)
+        if launch_command is None:
+            raise SystemExit(
+                f"No built-in launch command for platform {sys.platform!r} — "
+                "set [launch] command in config.toml"
+            )
+
     return Config(
         bot_token=token,
         allowed_user_ids=frozenset(allowed_list),
         base_dirs=tuple(base_dirs),
         allow_create=bool(projects.get("allow_create", True)),
-        # Keep in sync with the documented default in config.example.toml.
-        launch_command=str(launch.get(
-            "command",
-            'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control',
-        )),
+        launch_command=str(launch_command),
         log_level=str(logging_cfg.get("level", "INFO")),
     )

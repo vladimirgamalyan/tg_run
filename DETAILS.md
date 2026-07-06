@@ -48,6 +48,69 @@ The task is also visible in the GUI: `taskschd.msc` → "Task Scheduler Library"
 > **Do not keep a second instance running manually** (`uv run bot.py`): two
 > polling clients on one token cause the Telegram error `409 Conflict`.
 
+## Autostart on macOS
+
+The equivalent mechanism is a **LaunchAgent** (not a LaunchDaemon): the bot
+opens a visible `Terminal.app` window via AppleScript, which only works from
+the logged-in user's GUI session — a LaunchDaemon runs outside any user
+session and could not open windows. `install_agent.sh` registers it.
+
+Unlike on Windows, there is **no console-hiding trick needed at all**: a
+process started by `launchd` has no window of its own regardless of which
+Python interpreter runs it, so the bot's own venv interpreter
+(`.venv/bin/python3`) is used directly — no base/venv trampoline distinction,
+no `--hidden` flag.
+
+What the LaunchAgent does:
+
+- **starts at login** of the current user (`RunAtLoad`), in their GUI session
+  (`Terminal.app` windows are visible on screen);
+- **restarts on crash** (`KeepAlive.SuccessfulExit = false`, throttled to at
+  most once per minute via `ThrottleInterval`) — more reliably than the Windows
+  scheduler's restart count, since `launchd` supervises the process directly
+  rather than through a scheduler polling exit codes. `launchd` has no
+  give-up-after-N option, so a persistent startup failure (e.g. a typo in
+  `config.toml`) restarts on that interval indefinitely — check `bot.log`;
+- stdout/stderr go to `launchd.log` next to the script, as a low-volume
+  backstop (the full log stream stays in the rotated `bot.log`; under `launchd`
+  stderr is not a TTY, so the app does not add its console handler) —
+  `bot.log` (the app's own `RotatingFileHandler`) is still the primary log.
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.tgrun.bot   # (re)start
+launchctl bootout   gui/$(id -u)/com.tgrun.bot      # stop (unloads the job — no auto-restart)
+launchctl print     gui/$(id -u)/com.tgrun.bot      # status
+./uninstall_agent.sh                                # remove
+```
+
+`restart_agent.sh` just runs `launchctl kickstart -k`, which atomically stops
+and restarts the job — no PID-hunting is needed like on Windows, since
+`launchctl` owns the process directly and always knows which one it started.
+
+> **Do not keep a second instance running manually** (`uv run bot.py`): two
+> polling clients on one token cause the Telegram error `409 Conflict`.
+
+**Automation permission.** The first time the bot runs `osascript` to control
+`Terminal.app`, macOS shows a one-time "`<process>` wants access to control
+`Terminal`" prompt (System Settings → Privacy & Security → Automation). It
+needs a human to click "Allow" and cannot be granted unattended — trigger a
+`/claude` command once right after installing, while at the keyboard.
+
+**Using iTerm2 instead of Terminal.app:** set `command` in `config.toml`. A TOML
+multi-line literal string (`'''...'''`) avoids having to escape the quotes
+`osascript`/AppleScript need:
+
+```toml
+command = '''osascript -e 'tell application "iTerm" to activate' -e 'tell application "iTerm" to create window with default profile command ("bash -c " & quoted form of ("cd " & quoted form of "{path}" & " && claude --remote-control"))' '''
+```
+
+(iTerm runs a window's `command` directly — argv-style, not through a shell —
+so `cd … && …` must be wrapped in an explicit `bash -c`, otherwise iTerm tries
+to exec the literal token `cd`. The inner `quoted form of` shell-quotes
+`{path}`; the outer one quotes the whole `bash -c` argument as a single token.
+`create window with default profile` takes no working directory of its own,
+which is why the command `cd`s in itself.)
+
 ## Security
 
 - Access by a Telegram User ID whitelist only.
@@ -84,6 +147,12 @@ rules:
   characters (`0x00–0x1F`) — `:` also blocks drive-absolute paths like `C:/x`;
 - rejected: `%` — legal in a Windows folder name, but the launch command runs
   through `cmd.exe`, which expands `%VAR%` even inside quotes;
+- rejected **on macOS only**: `'` — legal in a folder name on either OS, but
+  the macOS default launch command embeds `{path}` inside a single-quoted
+  `osascript -e '...'` shell argument (see [A note on window
+  behavior](#a-note-on-window-behavior)); a literal `'` would break out of that
+  quoting. On Windows the command double-quotes `{path}`, so `'` is allowed
+  there;
 - rejected: the Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
   `COM1`–`COM9`, `LPT1`–`LPT9`), with or without an extension;
 - rejected: a segment with leading/trailing whitespace or a **trailing dot**.
@@ -136,7 +205,33 @@ reply says it exists and is not a folder.
   running. There are no Telegram error alerts — the log is the single place to
   look.
 
+## Default launch commands
+
+When `[launch] command` is left unset in `config.toml`, the bot uses a built-in
+default for the current OS (`_DEFAULT_LAUNCH_COMMANDS` in `config.py`). `{path}`
+is replaced with the absolute folder path at launch time. To customize (e.g. to
+close the window after `claude` exits), copy the relevant line into
+`config.toml` and edit it.
+
+**Windows** — Windows Terminal, a separate new window running PowerShell 7:
+
+```toml
+command = 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control'
+```
+
+**macOS** — Terminal.app via AppleScript. `do script` runs before `activate` so
+a cold start (Terminal not yet running) opens a single window:
+
+```toml
+command = '''osascript -e 'tell application "Terminal" to do script "cd " & quoted form of "{path}" & " && claude --remote-control"' -e 'tell application "Terminal" to activate' '''
+```
+
+On an unlisted platform (e.g. Linux) there is no built-in default — the bot
+refuses to start until `[launch] command` is set.
+
 ## A note on window behavior
+
+**Windows:**
 
 - `-w new` forces Windows Terminal to open a **separate new window**. Without
   it, `wt` by default adds a tab to an already open window — easy to miss.
@@ -146,6 +241,22 @@ reply says it exists and is not a folder.
 - `--remote-control` is passed to `claude` (pwsh's `-Command` appends trailing
   tokens to the command it runs), enabling Remote Control for that session
   regardless of the global setting.
+
+**macOS:**
+
+- `do script` with no target window opens a **separate new Terminal.app
+  window** each time (mirroring `-w new` on Windows); it runs *before*
+  `activate` so a cold start (Terminal not yet running) opens just one window,
+  and `activate` then brings it to the front.
+- `quoted form of` asks AppleScript to shell-quote `{path}` against shell
+  metacharacters (spaces, `$`, backticks, …) before Terminal's own shell sees
+  it. It does **not** protect the AppleScript layer: a literal `"` would
+  terminate the surrounding AppleScript string *before* `quoted form of` runs,
+  and a literal `'` would break out of the *outer* `osascript -e '...'` shell
+  quoting. Both are handled instead by `validate_path` in `bot.py`, which
+  rejects `"` (and, on macOS only, `'`) in folder names.
+- The window stays open after `claude` exits — same rationale as `-NoExit` on
+  Windows, so you can see the output.
 
 ## Folder trust dialog
 

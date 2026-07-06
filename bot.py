@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -67,10 +66,12 @@ def setup_logging(level: str = "INFO") -> None:
     file_handler.setFormatter(fmt)
 
     handlers: list[logging.Handler] = [file_handler]
-    # Write to the console only when it is visible: with --hidden the window is
-    # hidden, and under pythonw without a console sys.stderr == None. In both
-    # cases — file only.
-    if sys.stderr is not None and not HIDE_CONSOLE:
+    # Write to the console only when stderr is an interactive terminal: with
+    # --hidden the window is hidden, under pythonw without a console
+    # sys.stderr == None, and under launchd on macOS stderr is redirected to
+    # launchd.log (a file). The isatty() check keeps the full log stream out of
+    # that unrotated file, which would otherwise duplicate every bot.log line.
+    if sys.stderr is not None and not HIDE_CONSOLE and sys.stderr.isatty():
         try:
             sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except (AttributeError, ValueError):
@@ -109,7 +110,16 @@ secure_router = Router(name="secure")
 # `/` and `\` are excluded here: they separate path segments and are handled
 # by validate_path; every individual segment must not contain them anyway
 # because splitting removes them.
-_INVALID = re.compile(r'[<>:"|?*%\x00-\x1f]')
+#
+# `'` (\x27) is rejected only on macOS: the default launch command there wraps
+# {path} in a single-quoted `osascript -e '...'` shell argument, and an embedded
+# `'` would break out of that quoting. On Windows the wt.exe command double-
+# quotes {path} and cmd.exe handles `'` fine, so rejecting it there would need-
+# lessly block existing folders like `O'Brien-app`.
+_INVALID = re.compile(
+    r'[<>:"|?*%\x00-\x1f\x27]' if sys.platform == "darwin"
+    else r'[<>:"|?*%\x00-\x1f]'
+)
 
 # Windows reserved device names — invalid as folder names, with or without an
 # extension ("con", "con.txt").
@@ -230,11 +240,36 @@ def ensure_trusted(path: Path) -> None:
         logger.warning("Failed to write %s: %s", CLAUDE_CONFIG, e)
 
 
+# Background launch tasks are kept referenced here so the event loop doesn't
+# garbage-collect them mid-flight (asyncio only holds a weak reference to a task).
+_launch_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _run_launch(cmd: str) -> None:
+    """Run the launch command and log a non-zero exit with its stderr. The
+    launcher (wt.exe / osascript) spawns the terminal and returns promptly, so
+    this does not block on the Claude session. On macOS the common first-run
+    failure — Automation permission not granted, where osascript exits non-zero
+    with 'Not authorized to send Apple events to Terminal. (-1743)' — would
+    otherwise leave no trace at all while the bot reports success."""
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        detail = (stderr or b"").decode(errors="replace").strip()
+        logger.error("Launch command failed (exit %s): %s", proc.returncode, detail)
+
+
 def launch_claude(path: Path) -> None:
     ensure_trusted(path)
     cmd = config.launch_command.format(path=str(path))
     logger.info("Launching terminal: %s", cmd)
-    subprocess.Popen(cmd, shell=True)
+    task = asyncio.create_task(_run_launch(cmd))
+    _launch_tasks.add(task)
+    task.add_done_callback(_launch_tasks.discard)
 
 
 HELP_TEXT = (

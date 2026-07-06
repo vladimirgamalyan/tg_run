@@ -17,11 +17,17 @@ allow_create = true
 
 [launch]
 # Command to open a terminal with Claude Code. {path} — absolute path to the folder.
-# Windows Terminal (-w new = a separate new window) opens PowerShell 7 (pwsh)
-# in the project folder and runs claude in it. The bot marks the folder as
-# trusted itself (in ~/.claude.json) and --remote-control makes each session controllable from the
-# phone without enabling Remote Control globally in Claude Code settings.
-command = 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control'
+# Leave commented out to use the built-in default for your OS:
+#   Windows — Windows Terminal (a separate new window) running PowerShell 7 (pwsh).
+#   macOS   — Terminal.app, opened via AppleScript (osascript).
+# Either way, the bot marks the folder as trusted itself (in ~/.claude.json), and
+# --remote-control makes each session controllable from the phone without
+# enabling Remote Control globally in Claude Code settings. See DETAILS.md for
+# the exact default commands and how to customize them (e.g. to use iTerm2
+# instead of Terminal.app on macOS).
+# command = 'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control'
+# macOS default (Terminal.app via osascript):
+# command = '''osascript -e 'tell application "Terminal" to do script "cd " & quoted form of "{path}" & " && claude --remote-control"' -e 'tell application "Terminal" to activate' '''
 
 [logging]
 level = "INFO"

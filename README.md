@@ -2,10 +2,10 @@
 
 # tg_run — launch Claude Code from Telegram
 
-Text your home PC (Windows 11) from Telegram to launch Claude Code in any project
-folder. The bot opens a terminal with `claude.exe` running there, already in
-`--remote-control` mode — so you can keep steering the session from your phone
-([see below](#continue-from-your-phone)).
+Text your home PC (Windows 11 or macOS) from Telegram to launch Claude Code in
+any project folder. The bot opens a terminal with `claude` running there,
+already in `--remote-control` mode — so you can keep steering the session from
+your phone ([see below](#continue-from-your-phone)).
 
 ## Commands
 
@@ -45,13 +45,27 @@ session from the list.
 
 ## Quick start
 
-Requires [uv](https://docs.astral.sh/uv/) and Windows 11.
+Requires [uv](https://docs.astral.sh/uv/) and Windows 11 or macOS.
+
+**Windows:**
 
 ```powershell
 git clone <repo-url> C:\tools\tg_run   # clone into a PERMANENT folder (see note below)
 cd C:\tools\tg_run
 
 copy config.example.toml config.toml    # then edit config.toml: bot_token, base_dirs, allowed_user_ids
+
+uv sync                                 # create .venv and install dependencies
+uv run bot.py                           # first run in the foreground to check it works
+```
+
+**macOS:**
+
+```bash
+git clone <repo-url> ~/tools/tg_run     # clone into a PERMANENT folder (see note below)
+cd ~/tools/tg_run
+
+cp config.example.toml config.toml      # then edit config.toml: bot_token, base_dirs, allowed_user_ids
 
 uv sync                                 # create .venv and install dependencies
 uv run bot.py                           # first run in the foreground to check it works
@@ -65,10 +79,16 @@ Get your token from [@BotFather](https://t.me/BotFather) and put it into
 
 > **The bot runs from this folder — keep it in a permanent location.** Nothing
 > is copied elsewhere: the code, `.venv`, `config.toml` and `bot.log`
-> all live here, and the scheduler task points at this path. If you delete or
-> move the folder, the bot stops working (after moving, re-run
-> `install_task.ps1` to re-register the task with the new path). Put it
-> somewhere stable like `C:\tools\tg_run`, not in Downloads or a temp folder.
+> all live here, and the autostart mechanism points at this path. If you
+> delete or move the folder, the bot stops working (after moving, re-run
+> `install_task.ps1` / `install_agent.sh` to re-register with the new path).
+> Put it somewhere stable, not in Downloads or a temp folder.
+
+> **macOS target:** designed for a desktop Mac (Mac mini/Studio/iMac) that's
+> always on and logged in, the same way the Windows setup assumes an
+> always-on desktop PC. On a MacBook, display/system sleep will make the bot
+> unreachable until the machine wakes — disable sleep for it in System
+> Settings > Battery/Energy, or don't rely on it while the lid is closed.
 
 ## Configuration
 
@@ -81,8 +101,8 @@ Get your token from [@BotFather](https://t.me/BotFather) and put it into
 
 ## Autostart in the background
 
-To run unattended and start at every log on, register a Task Scheduler task
-(from the project folder):
+**Windows:** to run unattended and start at every log on, register a Task
+Scheduler task (from the project folder):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install_task.ps1
@@ -97,11 +117,32 @@ powershell -ExecutionPolicy Bypass -File .\restart_task.ps1     # restart (pick 
 powershell -ExecutionPolicy Bypass -File .\uninstall_task.ps1   # remove
 ```
 
+**macOS:** to run unattended and start at every log in, register a LaunchAgent
+(from the project folder):
+
+```bash
+./install_agent.sh
+```
+
+Manage it:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.tgrun.bot   # (re)start
+launchctl bootout gui/$(id -u)/com.tgrun.bot        # stop
+./restart_agent.sh                                  # restart (pick up a code change)
+./uninstall_agent.sh                                # remove
+```
+
+The first time the bot launches Claude Code, macOS will ask permission for it
+to control Terminal.app (System Settings > Privacy & Security > Automation) —
+trigger a `/claude` command once right after installing, while at the
+keyboard, to grant it.
+
 Don't also run `uv run bot.py` at the same time: two polling clients on one
 token cause a `409 Conflict`.
 
 ## More
 
 See **[DETAILS.md](DETAILS.md)** for how it works under the hood — the autostart
-mechanism (Task Scheduler, no-console launch), logging, the security model,
-window behavior, and Claude Code's folder-trust dialog.
+mechanism (Task Scheduler / LaunchAgent, no-console launch), logging, the
+security model, window behavior, and Claude Code's folder-trust dialog.
