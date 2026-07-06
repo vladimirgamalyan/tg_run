@@ -21,10 +21,14 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
     Write-Error "Task '$TaskName' not found. Install it first: .\install_task.ps1"
 }
 
-# Match this project's bot pythonw process by its full script path.
+# Match this project's bot process by its full script path. The scheduler task
+# passes the full path to bot.py (see install_task.ps1), so this matches the
+# autostarted bot; python.exe is included to also catch full-path manual runs.
+# A manual `uv run bot.py` uses a relative path and is NOT matched - do not
+# keep one running alongside the task (409 Conflict).
 $botRe = [regex]::Escape($BotPath)
 function Get-BotProcs {
-    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
         Where-Object { $_.CommandLine -match $botRe }
 }
 

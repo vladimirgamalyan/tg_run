@@ -15,7 +15,6 @@ _HERE = Path(__file__).resolve().parent
 class Config:
     bot_token: str
     allowed_user_ids: frozenset[int]
-    alert_chat_id: int
     base_dirs: tuple[Path, ...]
     allow_create: bool
     launch_command: str
@@ -24,7 +23,12 @@ class Config:
 
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     cfg_path = Path(path) if path is not None else _HERE / "config.toml"
-    data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise SystemExit(f"Cannot read {cfg_path}: {e}")
+    except tomllib.TOMLDecodeError as e:
+        raise SystemExit(f"Invalid TOML in {cfg_path}: {e}")
 
     tg = data.get("telegram", {})
     projects = data.get("projects", {})
@@ -35,11 +39,11 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     if not token:
         raise SystemExit("bot_token is not set — put it in config.toml")
 
-    # `base_dirs` is a list of project roots; a legacy scalar `base_dir` is
-    # still accepted so existing configs keep working after an update.
     raw_dirs = projects.get("base_dirs")
     if raw_dirs is None:
-        raw_dirs = [projects.get("base_dir", "")]
+        raise SystemExit("base_dirs is not set — put a list of folders in config.toml")
+    if not isinstance(raw_dirs, list):
+        raise SystemExit('base_dirs must be a list of paths, e.g. ["C:/projects"]')
     if not raw_dirs:
         raise SystemExit("base_dirs is empty — put at least one folder in config.toml")
 
@@ -58,16 +62,23 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         seen.add(key)
         base_dirs.append(base_dir)
 
-    allowed_list = [int(x) for x in tg.get("allowed_user_ids", [])]
-    # Where to send error alerts: explicit alert_chat_id or the first whitelist entry.
-    alert_chat_id = int(tg.get("alert_chat_id") or (allowed_list[0] if allowed_list else 0))
+    raw_ids = tg.get("allowed_user_ids", [])
+    if not isinstance(raw_ids, list):
+        raise SystemExit("allowed_user_ids must be a list of numeric Telegram IDs")
+    try:
+        allowed_list = [int(x) for x in raw_ids]
+    except (TypeError, ValueError):
+        raise SystemExit("allowed_user_ids entries must be numeric Telegram IDs")
 
     return Config(
         bot_token=token,
         allowed_user_ids=frozenset(allowed_list),
-        alert_chat_id=alert_chat_id,
         base_dirs=tuple(base_dirs),
         allow_create=bool(projects.get("allow_create", True)),
-        launch_command=str(launch.get("command", 'wt.exe -d "{path}" claude.exe --remote-control')),
+        # Keep in sync with the documented default in config.example.toml.
+        launch_command=str(launch.get(
+            "command",
+            'wt.exe -w new -d "{path}" pwsh -NoLogo -NoExit -Command claude --remote-control',
+        )),
         log_level=str(logging_cfg.get("level", "INFO")),
     )

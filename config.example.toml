@@ -5,8 +5,6 @@ bot_token = ""
 # Find your ID via @userinfobot (https://t.me/userinfobot), then put it here.
 # Example: allowed_user_ids = [123456789]
 allowed_user_ids = []
-# Where to send bot error notifications. 0 / unset → first of allowed_user_ids.
-alert_chat_id = 0
 
 [projects]
 # Directories with projects. Launching is only possible inside them.

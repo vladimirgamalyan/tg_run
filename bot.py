@@ -8,7 +8,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -42,6 +41,7 @@ if HIDE_CONSOLE:
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BotCommand, CallbackQuery, ErrorEvent, Message, TelegramObject, User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -94,27 +94,30 @@ def _log_unhandled(exc_type, exc_value, exc_tb) -> None:
     logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
 
 
-setup_logging()
-sys.excepthook = _log_unhandled
-
-try:
-    config: Config = load_config()
-except SystemExit:
-    # Invalid/missing token, no base_dir, etc. Log the cause, otherwise it is
-    # lost under autostart. The scheduler will restart the process.
-    logger.critical("Failed to load configuration", exc_info=True)
-    raise
-
-logging.getLogger().setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
+# Assigned in the __main__ block before the dispatcher starts. Importing this
+# module must stay side-effect free (no logging setup, no config load): an
+# accidental import (e.g. from a test) used to install the excepthook and
+# write the importer's crashes into the production bot.log.
+config: Config
 
 public_router = Router(name="public")
 secure_router = Router(name="secure")
 
 # Characters not allowed in Windows folder names, plus control characters.
+# `%` is legal in a folder name but rejected anyway: the launch command runs
+# through cmd.exe (shell=True), and cmd expands %VAR% even inside quotes.
 # `/` and `\` are excluded here: they separate path segments and are handled
 # by validate_path; every individual segment must not contain them anyway
 # because splitting removes them.
-_INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
+_INVALID = re.compile(r'[<>:"|?*%\x00-\x1f]')
+
+# Windows reserved device names — invalid as folder names, with or without an
+# extension ("con", "con.txt").
+_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{d}" for d in "123456789"}
+    | {f"LPT{d}" for d in "123456789"}
+)
 
 # Maximum callback_data length in Telegram — 64 bytes.
 _CB_LIMIT = 64
@@ -128,13 +131,24 @@ def esc(text: str) -> str:
 TG_TEXT_LIMIT = 4000  # conservative; Telegram hard limit is 4096 UTF-16 units
 
 
+def tg_len(text: str) -> int:
+    """Length in UTF-16 code units — the units Telegram limits count in
+    (a character outside the BMP, e.g. an emoji, counts as 2)."""
+    return sum(2 if ord(c) > 0xFFFF else 1 for c in text)
+
+
 def clip(text: str, limit: int = TG_TEXT_LIMIT) -> str:
-    """Truncate PLAIN text to `limit` chars, appending an ellipsis when cut.
-    Pass raw text BEFORE esc()/tag-wrapping so an HTML entity or tag is never
-    split at the boundary."""
-    if len(text) <= limit:
+    """Truncate PLAIN text to `limit` UTF-16 units, appending an ellipsis when
+    cut. Pass raw text BEFORE esc()/tag-wrapping so an HTML entity or tag is
+    never split at the boundary."""
+    if tg_len(text) <= limit:
         return text
-    return text[: limit - 1].rstrip() + "…"
+    units = 0
+    for i, c in enumerate(text):
+        units += 2 if ord(c) > 0xFFFF else 1
+        if units > limit - 1:  # keep one unit for the ellipsis
+            return text[:i].rstrip() + "…"
+    return text
 
 
 def validate_path(raw: str) -> str | None:
@@ -154,6 +168,8 @@ def validate_path(raw: str) -> str | None:
         # the name we echo back — so reject it too. `:` in _INVALID also
         # rejects drive-absolute paths like "C:/x".
         if _INVALID.search(seg) or ".." in seg or seg != seg.strip() or seg.endswith("."):
+            return None
+        if seg.split(".", 1)[0].upper() in _RESERVED:
             return None
     return "/".join(segments)
 
@@ -287,20 +303,21 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
     if matches:
         # The same relative path exists in several roots — ask which one.
         builder = InlineKeyboardBuilder()
-        has_buttons = False
+        dropped = 0
         for i, _target in matches:
             cb = f"run:{i}:{safe}"
             if len(cb.encode()) <= _CB_LIMIT:
                 builder.button(text=f"▶️ {config.base_dirs[i].as_posix()}", callback_data=cb)
-                has_buttons = True
+            else:
+                dropped += 1
         builder.adjust(1)
-        if has_buttons:
-            await message.answer(
-                f"📁 <b>{esc(safe)}</b> exists in several places. Where to launch?",
-                reply_markup=builder.as_markup(),
-            )
-        else:
+        if dropped == len(matches):
             await message.answer("⛔ Name is too long for the selection buttons.")
+            return
+        text = f"📁 <b>{esc(safe)}</b> exists in several places. Where to launch?"
+        if dropped:
+            text += f"\n⚠️ {dropped} of {len(matches)} locations don't fit the button limit and are not shown."
+        await message.answer(text, reply_markup=builder.as_markup())
         return
 
     # Folder not found — offer to create it, but only in roots where the
@@ -315,11 +332,11 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
             for i, root in enumerate(config.base_dirs)
             if (target := resolve_under(root, safe)) is not None and target.parent.is_dir()
         ]
-        cb_too_long = False
+        dropped = 0
         for i in creatable:
             cb = f"new:{i}:{safe}"
             if len(cb.encode()) > _CB_LIMIT:
-                cb_too_long = True
+                dropped += 1
                 continue
             builder.button(
                 text=f"➕ Create in {config.base_dirs[i].as_posix()}", callback_data=cb
@@ -327,7 +344,12 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
             has_buttons = True
         if has_buttons:
             lines.append("\nCreate a new folder and launch?")
-        elif cb_too_long:
+            if dropped:
+                lines.append(
+                    f"⚠️ {dropped} of {len(creatable)} locations don't fit the button limit "
+                    "and are not shown."
+                )
+        elif dropped:
             lines.append("\nName is too long to create via the button.")
         elif "/" in safe:
             lines.append("\nThe parent folder does not exist either — create it first.")
@@ -362,7 +384,7 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
         folder = root if sub is None else resolve_under(root, sub)
         if folder is None or not folder.is_dir():
             continue
-        header = f"📂 {folder.as_posix()}"
+        header = f"📂 {esc(folder.as_posix())}"
         try:
             dirs = [p for p in folder.iterdir() if p.is_dir()]
         except OSError as e:
@@ -375,7 +397,7 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
         await message.answer(f"📁 Folder <b>{esc(sub)}</b> not found.")
         return
     if all(isinstance(dirs, list) and not dirs for _, dirs in groups):
-        await message.answer("No projects yet.")
+        await message.answer("Folder is empty." if sub else "No projects yet.")
         return
 
     # Build line by line so truncation never falls inside an escaped HTML entity
@@ -390,10 +412,10 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
 
     def try_add(line: str) -> bool:
         nonlocal length
-        if out_of_room or length + len(line) + 1 > limit:
+        if out_of_room or length + tg_len(line) + 1 > limit:
             return False
         lines.append(line)
-        length += len(line) + 1
+        length += tg_len(line) + 1
         return True
 
     for gi, (header, dirs) in enumerate(groups):
@@ -435,7 +457,9 @@ def parse_root_callback(data: str) -> tuple[Path, str] | None:
     """Parse "<prefix>:<root index>:<relative path>" callback data; None if the
     index or path is invalid (e.g. a stale button from an older bot version)."""
     parts = data.split(":", 2)
-    if len(parts) != 3 or not parts[1].isdigit():
+    # isascii() too: isdigit() alone accepts Unicode digits like "²" that
+    # int() then rejects with a ValueError.
+    if len(parts) != 3 or not (parts[1].isascii() and parts[1].isdigit()):
         return None
     idx = int(parts[1])
     if idx >= len(config.base_dirs):
@@ -482,7 +506,13 @@ async def create_and_run(message: Message, root: Path, safe: str) -> None:
     if not config.allow_create:
         await message.answer("⛔ Folder creation is disabled in the config.")
         return
-    target = root / safe
+    # Re-resolve at execution time, not only when the button was offered: the
+    # button stays pressable forever, and a symlink/junction created since
+    # could make the path escape the root.
+    target = resolve_under(root, safe)
+    if target is None:
+        await message.answer("⛔ Path escapes the project roots.")
+        return
     if target.exists():
         if target.is_dir():
             await message.answer(
@@ -501,50 +531,12 @@ async def create_and_run(message: Message, root: Path, safe: str) -> None:
     await message.answer(f"✅ Created <b>{esc(safe)}</b> and launching Claude Code")
 
 
-# --- error notifications ----------------------------------------------------
+# --- error handling ----------------------------------------------------------
 
-# Throttling so that a storm of errors does not turn into a storm of Telegram
-# messages.
-_last_alert_ts = 0.0
-_ALERT_MIN_INTERVAL = 30.0
-
-
-async def notify_admin(bot: Bot, text: str) -> None:
-    """Send the admin a short error notification (with anti-flood)."""
-    chat_id = config.alert_chat_id
-    if not chat_id:
-        return
-    global _last_alert_ts
-    now = time.monotonic()
-    if now - _last_alert_ts < _ALERT_MIN_INTERVAL:
-        return
-    _last_alert_ts = now
-    try:
-        await bot.send_message(chat_id, clip(text))
-    except Exception:
-        logger.exception("Failed to send admin notification")
-
-
-async def on_error(event: ErrorEvent, bot: Bot) -> None:
-    """Catches exceptions from handlers: writes the traceback to the log and
-    sends an alert to the admin. Returning here does not kill polling — the bot
-    keeps running."""
+async def on_error(event: ErrorEvent) -> None:
+    """Catches exceptions from handlers and writes the traceback to the log.
+    Returning here does not kill polling — the bot keeps running."""
     logger.error("Error while handling update", exc_info=event.exception)
-    detail = clip(repr(event.exception), TG_TEXT_LIMIT - 64)  # room for the wrapper
-    await notify_admin(bot, f"⚠️ Bot error:\n<code>{esc(detail)}</code>")
-
-
-async def send_crash_alert(text: str) -> None:
-    """One-off emergency message on a fatal process crash — sent with a separate
-    client, since the main one may have failed to start (or is already closed)."""
-    chat_id = config.alert_chat_id
-    if not chat_id:
-        return
-    bot = Bot(config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    try:
-        await bot.send_message(chat_id, clip(text))
-    finally:
-        await bot.session.close()
 
 
 # --- startup ----------------------------------------------------------------
@@ -570,31 +562,53 @@ async def main() -> None:
     dp.include_router(public_router)
     dp.include_router(secure_router)
 
+    # Under autostart the bot comes up at logon, when the network is often not
+    # ready yet — do not die on the first API call. bot.me() doubles as the
+    # probe: its result is cached, so start_polling's own me() call later needs
+    # no network round-trip.
+    while True:
+        try:
+            await bot.me()
+            break
+        except TelegramNetworkError as e:
+            logger.warning("Telegram is unreachable (%s); retrying in 5 s", e)
+            await asyncio.sleep(5)
+
     # Telegram command menu. /claude takes a folder argument; sent from the menu
     # without one it replies with a usage hint, which is still useful.
-    await bot.set_my_commands([
-        BotCommand(command="claude", description="Launch Claude Code in a project folder"),
-        BotCommand(command="list", description="List projects"),
-        BotCommand(command="help", description="Help and command list"),
-    ])
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="claude", description="Launch Claude Code in a project folder"),
+            BotCommand(command="list", description="List projects"),
+            BotCommand(command="help", description="Help and command list"),
+        ])
+    except TelegramNetworkError as e:
+        # The menu is cosmetic — a network blip here must not kill the bot.
+        logger.warning("Failed to set the command menu: %s", e)
 
     logger.info("Bot started. base_dirs=%s", [p.as_posix() for p in config.base_dirs])
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
+    setup_logging()
+    sys.excepthook = _log_unhandled
+
+    try:
+        config = load_config()
+    except SystemExit:
+        # Invalid/missing token, no base_dirs, etc. Log the cause, otherwise it
+        # is lost under autostart.
+        logger.critical("Failed to load configuration", exc_info=True)
+        raise
+
+    logging.getLogger().setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
+
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception:
         logger.critical("Fatal error — process is exiting", exc_info=True)
-        try:
-            asyncio.run(send_crash_alert(
-                "💥 The bot crashed with a fatal error and will be restarted by the scheduler. "
-                "Details in bot.log."
-            ))
-        except Exception:
-            logger.exception("Failed to send crash alert")
         # A non-zero exit code signals the scheduler to restart the task.
         sys.exit(1)

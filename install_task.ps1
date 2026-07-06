@@ -45,11 +45,14 @@ $Pythonw = Join-Path $PyHome 'pythonw.exe'
 if (-not (Test-Path $Pythonw)) {
     Write-Error "Base interpreter not found: $Pythonw"
 }
-if (-not (Test-Path (Join-Path $ProjectDir $Script))) {
+$ScriptPath = Join-Path $ProjectDir $Script
+if (-not (Test-Path $ScriptPath)) {
     Write-Error "$Script not found in $ProjectDir"
 }
 
-$action = New-ScheduledTaskAction -Execute $Pythonw -Argument "$Script --hidden" -WorkingDirectory $ProjectDir
+# Full path to bot.py, not a relative one: restart_task.ps1 finds the bot
+# process by matching this path in the process command line.
+$action = New-ScheduledTaskAction -Execute $Pythonw -Argument "`"$ScriptPath`" --hidden" -WorkingDirectory $ProjectDir
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
 
@@ -65,8 +68,11 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero)
 
-# Idempotency: if the task already exists - recreate it.
+# Idempotency: if the task already exists - stop and recreate it. Stop first:
+# Unregister alone leaves an already-running bot process alive, and starting a
+# second instance would hit Telegram 409 Conflict.
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 

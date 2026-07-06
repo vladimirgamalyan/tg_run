@@ -27,6 +27,10 @@ The script registers the `tg_run` task and starts it immediately. What it does:
   (`site.addsitedir` in `bot.py`);
 - with no run-time limit.
 
+At logon the network is often not up yet, so before its first API call the bot
+**waits for Telegram to become reachable** (a `getMe` probe, retried every 5 s)
+instead of crashing and relying on the unreliable scheduler restart.
+
 In the task manager / process list you'll see a single `pythonw.exe` process
 running `bot.py --hidden` — that one process does the polling.
 
@@ -52,6 +56,15 @@ The task is also visible in the GUI: `taskschd.msc` → "Task Scheduler Library"
   UNC paths) is forbidden.
 - Only the configured Claude Code command is launched — arbitrary commands and
   paths are not supported.
+- **The trust chain to keep in mind:** anyone who controls an allowed Telegram
+  account can open a Claude Code session on this PC in an auto-trusted folder
+  with `--remote-control`, and whoever is signed in to the claude.ai account
+  can drive that session — effectively code execution on the machine. Protect
+  both accounts accordingly.
+- `ensure_trusted` rewrites `~/.claude.json` (read–modify–write with an atomic
+  replace). If a running Claude Code instance saves the file in that same
+  instant, its change can be lost. The window is tiny and the bot writes only
+  when the folder isn't trusted yet, but the race exists by design.
 
 ## Folder-path validation
 
@@ -69,6 +82,10 @@ rules:
 - rejected segments: `.`, `..`, or anything containing `..` (traversal);
 - rejected: the Windows-forbidden characters `< > : " | ? *` and control
   characters (`0x00–0x1F`) — `:` also blocks drive-absolute paths like `C:/x`;
+- rejected: `%` — legal in a Windows folder name, but the launch command runs
+  through `cmd.exe`, which expands `%VAR%` even inside quotes;
+- rejected: the Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
+  `COM1`–`COM9`, `LPT1`–`LPT9`), with or without an extension;
 - rejected: a segment with leading/trailing whitespace or a **trailing dot**.
   Windows silently trims these, so `foo.` would land on disk as `foo` — a
   mismatch with the name the bot echoed back — hence it refuses instead;
@@ -92,10 +109,12 @@ grow a whole new tree. The button is **not** removed or disabled after use — i
 stays under the message, so it can be pressed again.
 
 Pressing it a second time is **idempotent and safe**. The handler
-(`cb_new` → `create_and_run`) re-checks `target.exists()` before doing anything:
-if the folder was already created by the first press, it does **not** re-create
-it and does **not** launch a second Claude Code terminal — it just replies that
-the folder already exists and suggests `/claude <name>`.
+(`cb_new` → `create_and_run`) re-resolves the path through `resolve_under` (the
+symlink/junction safety net applies at press time, not only when the button was
+offered) and re-checks `target.exists()` before doing anything: if the folder
+was already created by the first press, it does **not** re-create it and does
+**not** launch a second Claude Code terminal — it just replies that the folder
+already exists and suggests `/claude <name>`.
 
 The check-then-create region (`target.exists()` … `target.mkdir(exist_ok=False)`)
 contains no `await`, so on the single-threaded asyncio loop even a rapid
@@ -105,7 +124,7 @@ see `exists()` and get the "already exists" reply — no duplicate folder, no
 press re-creates and launches it; if a non-directory with that name exists, the
 reply says it exists and is not a folder.
 
-## Logs and error notifications
+## Logs
 
 - Written to `bot.log` next to the script, with **rotation** (up to 1 MB × 5
   files) — straight from Python, so they work even under `pythonw.exe` without
@@ -113,9 +132,9 @@ reply says it exists and is not a folder.
 - The level — `[logging] level` in `config.toml`.
 - Unhandled exceptions and fatal crashes are logged with a traceback **before**
   the process exits — so the cause isn't lost after a restart.
-- On an error in a command handler the bot sends an **alert to Telegram** (with
-  anti-flood). The recipient is `[telegram] alert_chat_id`, or if it's `0` — the
-  first of `allowed_user_ids`.
+- An error in a command handler is logged with its traceback; polling keeps
+  running. There are no Telegram error alerts — the log is the single place to
+  look.
 
 ## A note on window behavior
 

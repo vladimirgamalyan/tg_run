@@ -103,6 +103,5 @@ token cause a `409 Conflict`.
 ## More
 
 See **[DETAILS.md](DETAILS.md)** for how it works under the hood — the autostart
-mechanism (Task Scheduler, no-console launch), logging and error
-alerts, the security model, window behavior, and Claude Code's folder-trust
-dialog.
+mechanism (Task Scheduler, no-console launch), logging, the security model,
+window behavior, and Claude Code's folder-trust dialog.
