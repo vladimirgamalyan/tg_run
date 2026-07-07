@@ -36,6 +36,7 @@ class Config:
     allowed_user_ids: frozenset[int]
     base_dirs: tuple[Path, ...]
     allow_create: bool
+    favorites: tuple[str, ...]
     launch_command: str
     log_level: str
 
@@ -91,6 +92,14 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         seen.add(key)
         base_dirs.append(base_dir)
 
+    # Favorite project paths, shown as one-tap buttons by /favorite. Same form
+    # as a /claude argument ("name" or "group/name"); validated at press time in
+    # bot.py, so here we only drop blanks and keep the configured order.
+    raw_favorites = projects.get("favorites", [])
+    if not isinstance(raw_favorites, list):
+        raise SystemExit('favorites must be a list of project paths, e.g. ["group/proj"]')
+    favorites = tuple(f for raw in raw_favorites if (f := str(raw).strip()))
+
     raw_ids = tg.get("allowed_user_ids", [])
     if not isinstance(raw_ids, list):
         raise SystemExit("allowed_user_ids must be a list of numeric Telegram IDs")
@@ -115,6 +124,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         allowed_user_ids=frozenset(allowed_list),
         base_dirs=tuple(base_dirs),
         allow_create=bool(projects.get("allow_create", True)),
+        favorites=favorites,
         launch_command=str(launch_command),
         log_level=str(logging_cfg.get("level", "INFO")),
     )

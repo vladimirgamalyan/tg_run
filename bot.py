@@ -277,6 +277,7 @@ HELP_TEXT = (
     "<b>/claude &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder "
     "(offers to create it if missing). Nested folders work too: "
     "<code>/claude group/proj</code>\n"
+    "<b>/favorite</b> — pick a preconfigured project from buttons\n"
     "<b>/list [folder]</b> — list projects (or the contents of a subfolder)\n"
 )
 
@@ -323,7 +324,13 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
     if safe is None:
         await message.answer("⛔ Invalid folder name.")
         return
+    await launch_or_prompt(message, safe)
 
+
+async def launch_or_prompt(message: Message, safe: str) -> None:
+    """Resolve an already-validated relative path against the project roots and
+    either launch, ask which root to use, or offer to create it. Shared by
+    /claude and the /favorite buttons so both behave identically."""
     matches = [
         (i, target)
         for i, root in enumerate(config.base_dirs)
@@ -473,6 +480,23 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
     await message.answer(clip("\n".join(lines)))
 
 
+@secure_router.message(Command("favorite", "favorites", ignore_case=True))
+async def cmd_favorite(message: Message) -> None:
+    if not config.favorites:
+        await message.answer(
+            "No favorites configured. Add a <code>favorites</code> list under "
+            "<code>[projects]</code> in config.toml."
+        )
+        return
+    # callback_data is just "fav:<index>" — always well within the 64-byte limit
+    # regardless of how long the favorite path is, so no dropping needed here.
+    builder = InlineKeyboardBuilder()
+    for i, fav in enumerate(config.favorites):
+        builder.button(text=f"▶️ {fav}", callback_data=f"fav:{i}")
+    builder.adjust(1)
+    await message.answer("⭐ <b>Favorite projects</b>", reply_markup=builder.as_markup())
+
+
 # Catches everything that didn't match the commands above (registered last, so
 # it fires only for unknown commands and arbitrary text). The access check is
 # performed by the same middleware as for the other secure_router commands.
@@ -522,6 +546,28 @@ async def cb_run(callback: CallbackQuery) -> None:
         await callback.message.answer(
             f"▶️ Launching Claude Code in <b>{esc(safe)}</b> ({esc(root.as_posix())})"
         )
+
+
+@secure_router.callback_query(F.data.startswith("fav:"))
+async def cb_favorite(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":", 1)
+    # isascii() too: isdigit() alone accepts Unicode digits like "²" that
+    # int() then rejects with a ValueError.
+    if len(parts) != 2 or not (parts[1].isascii() and parts[1].isdigit()):
+        await callback.answer("Invalid button", show_alert=True)
+        return
+    idx = int(parts[1])
+    if idx >= len(config.favorites):
+        # Stale button from before the favorites list was shortened.
+        await callback.answer("Favorite no longer exists", show_alert=True)
+        return
+    safe = validate_path(config.favorites[idx])
+    if safe is None:
+        await callback.answer("Invalid favorite path in config", show_alert=True)
+        return
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await launch_or_prompt(callback.message, safe)
 
 
 @secure_router.callback_query(F.data.startswith("new:"))
@@ -614,6 +660,7 @@ async def main() -> None:
     try:
         await bot.set_my_commands([
             BotCommand(command="claude", description="Launch Claude Code in a project folder"),
+            BotCommand(command="favorite", description="Launch a favorite project from buttons"),
             BotCommand(command="list", description="List projects"),
             BotCommand(command="help", description="Help and command list"),
         ])

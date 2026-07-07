@@ -12,6 +12,7 @@ your phone ([see below](#continue-from-your-phone)).
 | Command | Action |
 |---|---|
 | `/claude <folder>` | Open a terminal with Claude Code in a project folder |
+| `/favorite` | Launch a preconfigured project (`favorites` in `config.toml`) from buttons |
 | `/list [folder]` | List projects (or the contents of a subfolder) |
 
 Projects can live in several root directories (`base_dirs` in `config.toml`) —
