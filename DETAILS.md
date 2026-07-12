@@ -94,7 +94,7 @@ and restarts the job — no PID-hunting is needed like on Windows, since
 `Terminal.app`, macOS shows a one-time "`<process>` wants access to control
 `Terminal`" prompt (System Settings → Privacy & Security → Automation). It
 needs a human to click "Allow" and cannot be granted unattended — trigger a
-`/claude` command once right after installing, while at the keyboard.
+`/run` command once right after installing, while at the keyboard.
 
 **Using iTerm2 instead of Terminal.app:** set `command` in `config.toml`. A TOML
 multi-line literal string (`'''...'''`) avoids having to escape the quotes
@@ -131,7 +131,7 @@ which is why the command `cd`s in itself.)
 
 ## Folder-path validation
 
-Both `/claude <folder>` and the inline buttons run the input through
+Both `/run <folder>` and the inline buttons run the input through
 `validate_path` (`bot.py`). It normalises first, then rejects: an invalid path
 gets a plain "⛔ Invalid folder name." and never reaches the filesystem. The
 rules:
@@ -162,15 +162,15 @@ rules:
   (`resolve()` + `is_relative_to`, see `resolve_under`) — a safety net on top
   of the segment checks, e.g. against symlinks/junctions pointing outside.
 
-When the same relative path exists in several roots, `/claude` replies with one
+When the same relative path exists in several roots, `/run` replies with one
 button per root (`callback_data = "run:<root index>:<path>"`) and launches in
 the one you pick.
 
 ## Creating a folder from the button
 
-When `/claude` names a folder that doesn't exist (and `allow_create` is on), the
+When `/run` names a folder that doesn't exist (and `allow_create` is on), the
 reply carries an inline button *"➕ Create in \<root\>"* per root
-(`callback_data = "new:<root index>:<path>"`, built in `cmd_claude`). A button
+(`callback_data = "new:<root index>:<path>"`, built in `cmd_run`). A button
 is only offered for roots where the **parent** of the path already exists:
 `experiments/newproj` needs an existing `experiments`. Missing chains are never
 created (`mkdir` without `parents`), so a typo in the group name can't silently
@@ -183,7 +183,7 @@ symlink/junction safety net applies at press time, not only when the button was
 offered) and re-checks `target.exists()` before doing anything: if the folder
 was already created by the first press, it does **not** re-create it and does
 **not** launch a second Claude Code terminal — it just replies that the folder
-already exists and suggests `/claude <name>`.
+already exists and suggests `/run <name>`.
 
 The check-then-create region (`target.exists()` … `target.mkdir(exist_ok=False)`)
 contains no `await`, so on the single-threaded asyncio loop even a rapid

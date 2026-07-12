@@ -274,9 +274,9 @@ def launch_claude(path: Path) -> None:
 
 HELP_TEXT = (
     "🤖 <b>Claude Code launcher</b>\n\n"
-    "<b>/claude &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder "
+    "<b>/run &lt;folder&gt;</b> — open a terminal with Claude Code in a project folder "
     "(offers to create it if missing). Nested folders work too: "
-    "<code>/claude group/proj</code>\n"
+    "<code>/run group/proj</code>\n"
     "<b>/favorite</b> — pick a preconfigured project from buttons\n"
     "<b>/list [folder]</b> — list projects (or the contents of a subfolder)\n"
 )
@@ -314,11 +314,11 @@ async def cmd_help(message: Message) -> None:
 
 # --- protected commands -----------------------------------------------------
 
-@secure_router.message(Command("claude", ignore_case=True))
-async def cmd_claude(message: Message, command: CommandObject) -> None:
+@secure_router.message(Command("run", ignore_case=True))
+async def cmd_run(message: Message, command: CommandObject) -> None:
     raw = (command.args or "").strip()
     if not raw:
-        await message.answer("Usage: <code>/claude folder_name</code>")
+        await message.answer("Usage: <code>/run folder_name</code>")
         return
     safe = validate_path(raw)
     if safe is None:
@@ -330,7 +330,7 @@ async def cmd_claude(message: Message, command: CommandObject) -> None:
 async def launch_or_prompt(message: Message, safe: str) -> None:
     """Resolve an already-validated relative path against the project roots and
     either launch, ask which root to use, or offer to create it. Shared by
-    /claude and the /favorite buttons so both behave identically."""
+    /run and the /favorite buttons so both behave identically."""
     matches = [
         (i, target)
         for i, root in enumerate(config.base_dirs)
@@ -598,7 +598,7 @@ async def create_and_run(message: Message, root: Path, safe: str) -> None:
         if target.is_dir():
             await message.answer(
                 f"📁 Folder <b>{esc(safe)}</b> already exists — no need to create a new one.\n"
-                f"Launch Claude Code in it: <code>/claude {esc(safe)}</code>"
+                f"Launch Claude Code in it: <code>/run {esc(safe)}</code>"
             )
         else:
             await message.answer(f"⛔ <b>{esc(safe)}</b> already exists and is not a folder.")
@@ -655,11 +655,11 @@ async def main() -> None:
             logger.warning("Telegram is unreachable (%s); retrying in 5 s", e)
             await asyncio.sleep(5)
 
-    # Telegram command menu. /claude takes a folder argument; sent from the menu
+    # Telegram command menu. /run takes a folder argument; sent from the menu
     # without one it replies with a usage hint, which is still useful.
     try:
         await bot.set_my_commands([
-            BotCommand(command="claude", description="Launch Claude Code in a project folder"),
+            BotCommand(command="run", description="Launch Claude Code in a project folder"),
             BotCommand(command="favorite", description="Launch a favorite project from buttons"),
             BotCommand(command="list", description="List projects"),
             BotCommand(command="help", description="Help and command list"),

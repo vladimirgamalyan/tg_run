@@ -13,7 +13,7 @@
 # First run only: macOS will prompt to let this process control Terminal.app
 # (System Settings > Privacy & Security > Automation). That prompt needs a
 # human to click "Allow" and will not appear/succeed unattended — trigger a
-# /claude command once via Telegram right after installing, while you're at
+# /run command once via Telegram right after installing, while you're at
 # the keyboard, to grant it.
 
 set -euo pipefail
@@ -103,4 +103,4 @@ launchctl bootstrap "$DOMAIN" "$PLIST"
 echo "Agent '$LABEL' registered and started."
 echo "Logs: $PROJECT_DIR/bot.log (launchd stdout/stderr backstop: $LOG)"
 echo "Note: do not keep a second bot instance running manually (Telegram will return 409 Conflict)."
-echo "First launch: macOS will ask to let this process control Terminal.app — trigger a /claude command once now, at the keyboard, to grant it."
+echo "First launch: macOS will ask to let this process control Terminal.app — trigger a /run command once now, at the keyboard, to grant it."

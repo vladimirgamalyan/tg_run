@@ -93,7 +93,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         base_dirs.append(base_dir)
 
     # Favorite project paths, shown as one-tap buttons by /favorite. Same form
-    # as a /claude argument ("name" or "group/name"); validated at press time in
+    # as a /run argument ("name" or "group/name"); validated at press time in
     # bot.py, so here we only drop blanks and keep the configured order.
     raw_favorites = projects.get("favorites", [])
     if not isinstance(raw_favorites, list):

@@ -8,15 +8,15 @@ allowed_user_ids = []
 
 [projects]
 # Directories with projects. Launching is only possible inside them.
-# /claude accepts a folder name or a relative path like group/proj.
+# /run accepts a folder name or a relative path like group/proj.
 # Example: base_dirs = ["C:/projects", "K:/work"]
 base_dirs = ["C:/projects"]
 # Allow the bot to create new subfolders (via the "create and launch" button
-# shown when /claude targets a missing folder).
+# shown when /run targets a missing folder).
 allow_create = true
-# Projects shown as one-tap buttons by /favorite. Same form as a /claude
+# Projects shown as one-tap buttons by /favorite. Same form as a /run
 # argument: a folder name or a relative path like group/proj. Pressing a button
-# does exactly what /claude <project> does (launch, ask which root, or offer to
+# does exactly what /run <project> does (launch, ask which root, or offer to
 # create). Leave empty to disable the command.
 # Example: favorites = ["my-app", "clients/acme"]
 favorites = []

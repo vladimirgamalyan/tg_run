@@ -11,7 +11,7 @@ your phone ([see below](#continue-from-your-phone)).
 
 | Command | Action |
 |---|---|
-| `/claude <folder>` | Open a terminal with Claude Code in a project folder |
+| `/run <folder>` | Open a terminal with Claude Code in a project folder |
 | `/favorite` | Launch a preconfigured project (`favorites` in `config.toml`) from buttons |
 | `/list [folder]` | List projects (or the contents of a subfolder) |
 
@@ -136,7 +136,7 @@ launchctl bootout gui/$(id -u)/com.tgrun.bot        # stop
 
 The first time the bot launches Claude Code, macOS will ask permission for it
 to control Terminal.app (System Settings > Privacy & Security > Automation) —
-trigger a `/claude` command once right after installing, while at the
+trigger a `/run` command once right after installing, while at the
 keyboard, to grant it.
 
 Don't also run `uv run bot.py` at the same time: two polling clients on one
