@@ -366,6 +366,11 @@ async def launch_or_prompt(message: Message, safe: str) -> None:
     # parent folder already exists (no mkdir -p: a typo in the group name must
     # not silently create a whole new tree).
     lines = [f"📁 Folder <b>{esc(safe)}</b> not found."]
+    lines += [
+        f"⚠️ Base folder not found: {esc(root.as_posix())}"
+        for root in config.base_dirs
+        if not root.is_dir()
+    ]
     builder = InlineKeyboardBuilder()
     has_buttons = False
     if config.allow_create:
@@ -421,8 +426,12 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
 
     # One group per root (or per root containing the requested subfolder):
     # a header with the folder path plus its subfolders, most recent on top.
-    groups: list[tuple[str, list[Path] | OSError]] = []
+    groups: list[tuple[str, list[Path] | OSError | None]] = []
     for root in config.base_dirs:
+        if not root.is_dir():
+            # None marks a root whose folder is missing (e.g. drive not mounted).
+            groups.append((f"📂 {esc(root.as_posix())}", None))
+            continue
         folder = root if sub is None else resolve_under(root, sub)
         if folder is None or not folder.is_dir():
             continue
@@ -435,8 +444,14 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
         dirs.sort(key=mtime, reverse=True)
         groups.append((header, dirs))
 
-    if sub is not None and not groups:
-        await message.answer(f"📁 Folder <b>{esc(sub)}</b> not found.")
+    if sub is not None and all(dirs is None for _, dirs in groups):
+        not_found = [f"📁 Folder <b>{esc(sub)}</b> not found."]
+        not_found += [
+            f"⚠️ Base folder not found: {esc(root.as_posix())}"
+            for root in config.base_dirs
+            if not root.is_dir()
+        ]
+        await message.answer("\n".join(not_found))
         return
     if all(isinstance(dirs, list) and not dirs for _, dirs in groups):
         await message.answer("Folder is empty." if sub else "No projects yet.")
@@ -467,7 +482,9 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
             out_of_room = True
         elif isinstance(dirs, OSError):
             try_add(f"• ⛔ error: {esc(str(dirs))}")
-        if isinstance(dirs, OSError):
+        elif dirs is None:
+            try_add("• ⚠️ folder not found")
+        if dirs is None or isinstance(dirs, OSError):
             continue
         for p in dirs:
             if try_add(f"• {esc(p.name)}"):
@@ -536,6 +553,9 @@ async def cb_run(callback: CallbackQuery) -> None:
         await callback.answer("Invalid button", show_alert=True)
         return
     root, safe = parsed
+    if not root.is_dir():
+        await callback.answer("Base folder not found", show_alert=True)
+        return
     target = resolve_under(root, safe)
     if target is None or not target.is_dir():
         await callback.answer("Folder no longer exists", show_alert=True)

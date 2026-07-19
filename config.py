@@ -73,8 +73,9 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         if not str(raw).strip():
             raise SystemExit("base_dirs entry is empty — put a folder path in config.toml")
         base_dir = Path(str(raw)).expanduser()
-        if not base_dir.is_dir():
-            raise SystemExit(f"base_dirs entry does not exist or is not a folder: {base_dir}")
+        # Existence is deliberately not checked here: a root may live on a drive
+        # that is not mounted yet at logon. Handlers check is_dir() per request
+        # and report unavailable roots in /list and /run replies.
         base_dir = base_dir.resolve()
         # On macOS the default launch command embeds this base_dir prefix into a
         # single-quoted `osascript -e '...'` argument and an AppleScript string
