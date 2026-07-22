@@ -5,11 +5,16 @@
   Why the scheduler and not a service: the bot opens VISIBLE Windows Terminal
   windows, and those appear only in an interactive user session. A service
   (session 0) would launch them invisibly. Therefore:
-    - an "At log on" trigger for the current user;
+    - an "At log on" trigger for the current user, REPEATING every 10 minutes
+      indefinitely: this is the self-heal. With MultipleInstances=IgnoreNew a
+      repetition while the bot is running is a no-op; if it has died the next
+      repetition brings it back within 10 minutes. The logon trigger alone is
+      not enough - waking from sleep does not create a logon event, so a bot
+      killed during a sleep/resume cycle would otherwise stay dead until the
+      next reboot (this actually happened: ~21 h of downtime);
     - LogonType Interactive ("run only when the user is logged on");
-    - a scheduler RestartCount (3x, 1 min) as a best-effort restart fallback:
-      note it does not reliably fire on this system, so a crash generally needs
-      a manual Start-ScheduledTask;
+    - a scheduler RestartCount (3x, 1 min) kept as a secondary fallback, though
+      it does not reliably fire on this system;
     - no run-time limit; console window hidden (pythonw.exe).
 
   Run (from the project folder):
@@ -55,6 +60,16 @@ if (-not (Test-Path $ScriptPath)) {
 $action = New-ScheduledTaskAction -Execute $Pythonw -Argument "`"$ScriptPath`" --hidden" -WorkingDirectory $ProjectDir
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
+# Repeat every 10 minutes forever. Waking from sleep does not fire the logon
+# trigger, so without this a bot that died during a sleep/resume cycle would
+# stay dead until the next reboot. MultipleInstances=IgnoreNew (the default)
+# makes a repetition a no-op while the bot is already running; StartWhenAvailable
+# (in the settings below) runs a repetition missed during sleep on wake.
+# Duration is intentionally omitted: an empty RepetitionDuration means
+# "Indefinitely" to Task Scheduler. [TimeSpan]::MaxValue serializes to a value
+# the scheduler rejects as out of range, so do NOT set it.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 10)).Repetition
 
 $principal = New-ScheduledTaskPrincipal -UserId $Account -LogonType Interactive -RunLevel Limited
 

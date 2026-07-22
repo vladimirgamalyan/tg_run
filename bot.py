@@ -90,6 +90,11 @@ def _log_unhandled(exc_type, exc_value, exc_tb) -> None:
     before the process dies — otherwise the cause can't be recovered after a
     restart."""
     if issubclass(exc_type, KeyboardInterrupt):
+        # Under pythonw there is no console, so sys.__excepthook__ prints
+        # nowhere. Record the interrupt (a Ctrl+C, or a shutdown/sleep power
+        # signal) so a silent exit-code-1 death is no longer a mystery after a
+        # restart.
+        logger.warning("Interrupted (KeyboardInterrupt) - process exiting")
         sys.__excepthook__(exc_type, exc_value, exc_tb)
         return
     logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
@@ -708,7 +713,12 @@ if __name__ == "__main__":
 
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
+        # Already logged by the excepthook above; re-raise for standard behavior.
+        raise
+    except SystemExit as e:
+        # SystemExit does not trigger sys.excepthook, so log the exit here.
+        logger.warning("Exiting (SystemExit code=%s)", e.code)
         raise
     except Exception:
         logger.critical("Fatal error — process is exiting", exc_info=True)
