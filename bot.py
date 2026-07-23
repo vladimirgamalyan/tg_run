@@ -569,10 +569,9 @@ async def cb_run(callback: CallbackQuery) -> None:
 
 @secure_router.callback_query(F.data.startswith("ask:"))
 async def cb_ask(callback: CallbackQuery) -> None:
-    """A project tapped in the /list keyboard. Never launches on the first tap —
-    to guard against accidental taps it asks for confirmation when the name is
-    unique, and shows the root-selection menu (itself a deliberate choice, so no
-    extra confirmation needed) when the name exists in several roots."""
+    """A project tapped in the /list keyboard. Launches straight away when the
+    name is unique, and shows the root-selection menu (a deliberate choice) when
+    the name exists in several roots."""
     safe = validate_path((callback.data or "")[len("ask:"):])
     if safe is None:
         await callback.answer("Invalid button", show_alert=True)
@@ -586,28 +585,24 @@ async def cb_ask(callback: CallbackQuery) -> None:
         # The folder was removed since the list was rendered.
         await callback.answer("Folder no longer exists", show_alert=True)
         return
+
+    if len(matches) == 1:
+        idx, target = matches[0]
+        await callback.answer("Launching…")
+        launch_claude(target)
+        if isinstance(callback.message, Message):
+            await callback.message.answer(
+                f"▶️ Launching Claude Code in <b>{esc(safe)}</b> "
+                f"({esc(config.base_dirs[idx].as_posix())})"
+            )
+        return
+
     await callback.answer()
     if not isinstance(callback.message, Message):
         return
 
-    builder = InlineKeyboardBuilder()
-    if len(matches) == 1:
-        idx = matches[0][0]
-        cb = f"run:{idx}:{safe}"
-        if len(cb.encode()) > _CB_LIMIT:
-            await callback.message.answer("⛔ Name is too long to launch via button.")
-            return
-        builder.button(text="▶️ Launch", callback_data=cb)
-        builder.button(text="✖️ Cancel", callback_data="cancel")
-        builder.adjust(1)
-        await callback.message.answer(
-            f"▶️ Launch Claude Code in <b>{esc(safe)}</b>?\n"
-            f"{esc(config.base_dirs[idx].as_posix())}",
-            reply_markup=builder.as_markup(),
-        )
-        return
-
     # Several roots contain this name — let the user pick one (or Cancel).
+    builder = InlineKeyboardBuilder()
     dropped = 0
     for i, _target in matches:
         cb = f"run:{i}:{safe}"
