@@ -40,7 +40,7 @@ if HIDE_CONSOLE:
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BotCommand, CallbackQuery, ErrorEvent, Message, TelegramObject, User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -137,33 +137,15 @@ _RESERVED = frozenset(
 # Maximum callback_data length in Telegram — 64 bytes.
 _CB_LIMIT = 64
 
+# How many project buttons /list shows at most. Telegram caps an inline keyboard
+# at 100 buttons and a long grid is unwieldy on a phone, so only the N most
+# recently modified projects become buttons; the rest are summarized as a count.
+_LIST_BUTTONS_MAX = 50
+
 
 def esc(text: str) -> str:
     """Escape text for parse_mode=HTML."""
     return html.escape(text)
-
-
-TG_TEXT_LIMIT = 4000  # conservative; Telegram hard limit is 4096 UTF-16 units
-
-
-def tg_len(text: str) -> int:
-    """Length in UTF-16 code units — the units Telegram limits count in
-    (a character outside the BMP, e.g. an emoji, counts as 2)."""
-    return sum(2 if ord(c) > 0xFFFF else 1 for c in text)
-
-
-def clip(text: str, limit: int = TG_TEXT_LIMIT) -> str:
-    """Truncate PLAIN text to `limit` UTF-16 units, appending an ellipsis when
-    cut. Pass raw text BEFORE esc()/tag-wrapping so an HTML entity or tag is
-    never split at the boundary."""
-    if tg_len(text) <= limit:
-        return text
-    units = 0
-    for i, c in enumerate(text):
-        units += 2 if ord(c) > 0xFFFF else 1
-        if units > limit - 1:  # keep one unit for the ellipsis
-            return text[:i].rstrip() + "…"
-    return text
 
 
 def validate_path(raw: str) -> str | None:
@@ -283,7 +265,8 @@ HELP_TEXT = (
     "(offers to create it if missing). Nested folders work too: "
     "<code>/run group/proj</code>\n"
     "<b>/favorite</b> — pick a preconfigured project from buttons\n"
-    "<b>/list [folder]</b> — list projects (or the contents of a subfolder)\n"
+    "<b>/list [folder]</b> — list projects as tap-to-launch buttons "
+    "(or the contents of a subfolder)\n"
 )
 
 
@@ -429,77 +412,71 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
         except OSError:
             return 0.0
 
-    # One group per root (or per root containing the requested subfolder):
-    # a header with the folder path plus its subfolders, most recent on top.
-    groups: list[tuple[str, list[Path] | OSError | None]] = []
+    # Collect project folders across all roots, deduplicated by relative path:
+    # the same name in several roots becomes ONE button, and tapping it opens the
+    # root-selection menu (which doubles as the confirmation there). The stored
+    # mtime is the most recent copy, so recency sorting stays correct.
+    best_mtime: dict[str, float] = {}
+    notes: list[str] = []  # missing/unreadable roots, shown as text below
+    sub_folder_found = False
     for root in config.base_dirs:
         if not root.is_dir():
-            # None marks a root whose folder is missing (e.g. drive not mounted).
-            groups.append((f"📂 {esc(root.as_posix())}", None))
+            notes.append(f"⚠️ Base folder not found: {esc(root.as_posix())}")
             continue
         folder = root if sub is None else resolve_under(root, sub)
         if folder is None or not folder.is_dir():
             continue
-        header = f"📂 {esc(folder.as_posix())}"
+        sub_folder_found = True
         try:
             dirs = [p for p in folder.iterdir() if p.is_dir()]
         except OSError as e:
-            groups.append((header, e))
-            continue
-        dirs.sort(key=mtime, reverse=True)
-        groups.append((header, dirs))
-
-    if sub is not None and all(dirs is None for _, dirs in groups):
-        not_found = [f"📁 Folder <b>{esc(sub)}</b> not found."]
-        not_found += [
-            f"⚠️ Base folder not found: {esc(root.as_posix())}"
-            for root in config.base_dirs
-            if not root.is_dir()
-        ]
-        await message.answer("\n".join(not_found))
-        return
-    if all(isinstance(dirs, list) and not dirs for _, dirs in groups):
-        await message.answer("Folder is empty." if sub else "No projects yet.")
-        return
-
-    # Build line by line so truncation never falls inside an escaped HTML entity
-    # (a name with & < > " ' would otherwise break Telegram's HTML parsing).
-    footer_reserve = 64  # room for the "… and N more" marker
-    limit = TG_TEXT_LIMIT - footer_reserve
-    lines: list[str] = []
-    length = 0
-    shown = 0
-    hidden = 0
-    out_of_room = False
-
-    def try_add(line: str) -> bool:
-        nonlocal length
-        if out_of_room or length + tg_len(line) + 1 > limit:
-            return False
-        lines.append(line)
-        length += tg_len(line) + 1
-        return True
-
-    for gi, (header, dirs) in enumerate(groups):
-        if gi > 0 and not try_add(""):
-            out_of_room = True
-        elif not try_add(header):
-            out_of_room = True
-        elif isinstance(dirs, OSError):
-            try_add(f"• ⛔ error: {esc(str(dirs))}")
-        elif dirs is None:
-            try_add("• ⚠️ folder not found")
-        if dirs is None or isinstance(dirs, OSError):
+            notes.append(f"⛔ {esc(folder.as_posix())}: {esc(str(e))}")
             continue
         for p in dirs:
-            if try_add(f"• {esc(p.name)}"):
-                shown += 1
-            else:
-                out_of_room = True
-                hidden += 1
+            relpath = p.name if sub is None else f"{sub}/{p.name}"
+            m = mtime(p)
+            if m > best_mtime.get(relpath, -1.0):
+                best_mtime[relpath] = m
+
+    if sub is not None and not sub_folder_found:
+        not_found = [f"📁 Folder <b>{esc(sub)}</b> not found."]
+        not_found += notes
+        await message.answer("\n".join(not_found))
+        return
+
+    if not best_mtime:
+        msg = "Folder is empty." if sub else "No projects yet."
+        if notes:
+            msg = "\n".join([msg, *notes])
+        await message.answer(msg)
+        return
+
+    # Most recently modified first, then turn each into a launch button. Button
+    # labels are plain text (no HTML parsing), so they are NOT escaped.
+    names = sorted(best_mtime, key=lambda n: best_mtime[n], reverse=True)
+    builder = InlineKeyboardBuilder()
+    shown = 0
+    hidden = 0
+    for name in names:
+        cb = f"ask:{name}"
+        if shown >= _LIST_BUTTONS_MAX or len(cb.encode()) > _CB_LIMIT:
+            hidden += 1
+            continue
+        # Only the last path segment: for /list <group> the group is already in
+        # the header, and the flat keyboard has no room for the full path.
+        builder.button(text=f"▶️ {name.rsplit('/', 1)[-1]}", callback_data=cb)
+        shown += 1
+    builder.adjust(1)
+
+    header = "📂 <b>Projects</b>" if sub is None else f"📂 <b>{esc(sub)}</b>"
+    lines = [f"{header} — tap to launch"]
     if hidden:
-        lines.append(f"… and {hidden} more ({shown} shown)")
-    await message.answer(clip("\n".join(lines)))
+        lines.append(
+            f"… and {hidden} more (showing {shown} most recent). "
+            "Use /run &lt;name&gt; or /list &lt;folder&gt;."
+        )
+    lines += notes
+    await message.answer("\n".join(lines), reply_markup=builder.as_markup())
 
 
 @secure_router.message(Command("favorite", "favorites", ignore_case=True))
@@ -571,6 +548,76 @@ async def cb_run(callback: CallbackQuery) -> None:
         await callback.message.answer(
             f"▶️ Launching Claude Code in <b>{esc(safe)}</b> ({esc(root.as_posix())})"
         )
+
+
+@secure_router.callback_query(F.data.startswith("ask:"))
+async def cb_ask(callback: CallbackQuery) -> None:
+    """A project tapped in the /list keyboard. Never launches on the first tap —
+    to guard against accidental taps it asks for confirmation when the name is
+    unique, and shows the root-selection menu (itself a deliberate choice, so no
+    extra confirmation needed) when the name exists in several roots."""
+    safe = validate_path((callback.data or "")[len("ask:"):])
+    if safe is None:
+        await callback.answer("Invalid button", show_alert=True)
+        return
+    matches = [
+        (i, target)
+        for i, root in enumerate(config.base_dirs)
+        if (target := resolve_under(root, safe)) is not None and target.is_dir()
+    ]
+    if not matches:
+        # The folder was removed since the list was rendered.
+        await callback.answer("Folder no longer exists", show_alert=True)
+        return
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+
+    builder = InlineKeyboardBuilder()
+    if len(matches) == 1:
+        idx = matches[0][0]
+        cb = f"run:{idx}:{safe}"
+        if len(cb.encode()) > _CB_LIMIT:
+            await callback.message.answer("⛔ Name is too long to launch via button.")
+            return
+        builder.button(text="▶️ Launch", callback_data=cb)
+        builder.button(text="✖️ Cancel", callback_data="cancel")
+        builder.adjust(1)
+        await callback.message.answer(
+            f"▶️ Launch Claude Code in <b>{esc(safe)}</b>?\n"
+            f"{esc(config.base_dirs[idx].as_posix())}",
+            reply_markup=builder.as_markup(),
+        )
+        return
+
+    # Several roots contain this name — let the user pick one (or Cancel).
+    dropped = 0
+    for i, _target in matches:
+        cb = f"run:{i}:{safe}"
+        if len(cb.encode()) <= _CB_LIMIT:
+            builder.button(text=f"▶️ {config.base_dirs[i].as_posix()}", callback_data=cb)
+        else:
+            dropped += 1
+    builder.button(text="✖️ Cancel", callback_data="cancel")
+    builder.adjust(1)
+    text = f"📁 <b>{esc(safe)}</b> exists in several places. Where to launch?"
+    if dropped:
+        text += (
+            f"\n⚠️ {dropped} of {len(matches)} locations don't fit the button "
+            "limit and are not shown."
+        )
+    await callback.message.answer(text, reply_markup=builder.as_markup())
+
+
+@secure_router.callback_query(F.data == "cancel")
+async def cb_cancel(callback: CallbackQuery) -> None:
+    await callback.answer("Cancelled")
+    if isinstance(callback.message, Message):
+        try:
+            await callback.message.edit_text("✖️ Cancelled")
+        except TelegramBadRequest:
+            # Message too old to edit, or already changed — nothing to clean up.
+            pass
 
 
 @secure_router.callback_query(F.data.startswith("fav:"))
