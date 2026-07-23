@@ -137,10 +137,10 @@ _RESERVED = frozenset(
 # Maximum callback_data length in Telegram — 64 bytes.
 _CB_LIMIT = 64
 
-# How many project buttons /list shows at most. Telegram caps an inline keyboard
-# at 100 buttons and a long grid is unwieldy on a phone, so only the N most
-# recently modified projects become buttons; the rest are summarized as a count.
-_LIST_BUTTONS_MAX = 50
+# How many project buttons one /list page shows; a "More" button reveals the
+# next page. Keeps the keyboard short on a phone and sidesteps Telegram's
+# 100-button-per-message limit for users with many projects.
+_LIST_PAGE = 20
 
 
 def esc(text: str) -> str:
@@ -396,15 +396,11 @@ async def launch_or_prompt(message: Message, safe: str) -> None:
     )
 
 
-@secure_router.message(Command("list", ignore_case=True))
-async def cmd_list(message: Message, command: CommandObject) -> None:
-    raw = (command.args or "").strip()
-    sub: str | None = None
-    if raw:
-        sub = validate_path(raw)
-        if sub is None:
-            await message.answer("⛔ Invalid folder name.")
-            return
+def collect_projects(sub: str | None) -> tuple[list[str], list[str], bool]:
+    """Gather project relative paths across all roots, deduplicated by path
+    (the same name in several roots becomes ONE entry) and sorted most-recent
+    first. Also returns text notes for missing/unreadable roots and whether at
+    least one root actually contained the requested subfolder."""
 
     def mtime(p: Path) -> float:
         try:
@@ -412,13 +408,9 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
         except OSError:
             return 0.0
 
-    # Collect project folders across all roots, deduplicated by relative path:
-    # the same name in several roots becomes ONE button, and tapping it opens the
-    # root-selection menu (which doubles as the confirmation there). The stored
-    # mtime is the most recent copy, so recency sorting stays correct.
     best_mtime: dict[str, float] = {}
     notes: list[str] = []  # missing/unreadable roots, shown as text below
-    sub_folder_found = False
+    sub_found = False
     for root in config.base_dirs:
         if not root.is_dir():
             notes.append(f"⚠️ Base folder not found: {esc(root.as_posix())}")
@@ -426,7 +418,7 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
         folder = root if sub is None else resolve_under(root, sub)
         if folder is None or not folder.is_dir():
             continue
-        sub_folder_found = True
+        sub_found = True
         try:
             dirs = [p for p in folder.iterdir() if p.is_dir()]
         except OSError as e:
@@ -438,45 +430,70 @@ async def cmd_list(message: Message, command: CommandObject) -> None:
             if m > best_mtime.get(relpath, -1.0):
                 best_mtime[relpath] = m
 
-    if sub is not None and not sub_folder_found:
-        not_found = [f"📁 Folder <b>{esc(sub)}</b> not found."]
-        not_found += notes
-        await message.answer("\n".join(not_found))
+    names = sorted(best_mtime, key=lambda n: best_mtime[n], reverse=True)
+    return names, notes, sub_found
+
+
+def render_list_page(names: list[str], notes: list[str], sub: str | None, offset: int):
+    """Build the (text, keyboard) for one /list page of at most _LIST_PAGE launch
+    buttons starting at `offset`, plus a "More" button when projects remain.
+    Deduped same-named projects open the root-selection menu on tap; unique ones
+    ask for confirmation (see cb_ask)."""
+    builder = InlineKeyboardBuilder()
+    shown = 0
+    i = offset
+    while i < len(names) and shown < _LIST_PAGE:
+        cb = f"ask:{names[i]}"
+        if len(cb.encode()) <= _CB_LIMIT:
+            # Only the last path segment: for /list <group> the group is already
+            # in the header, and the flat keyboard has no room for the full path.
+            builder.button(text=f"▶️ {names[i].rsplit('/', 1)[-1]}", callback_data=cb)
+            shown += 1
+        i += 1
+
+    remaining = len(names) - i
+    # `i` (not offset + _LIST_PAGE) so paging resumes right after the last item
+    # rendered, even when some names were skipped for exceeding the byte limit.
+    more_cb = f"more:{i}" if sub is None else f"more:{i}:{sub}"
+    has_more = remaining > 0 and len(more_cb.encode()) <= _CB_LIMIT
+    if has_more:
+        builder.button(text=f"⬇️ More ({remaining})", callback_data=more_cb)
+    builder.adjust(1)
+
+    header = "📂 <b>Projects</b>" if sub is None else f"📂 <b>{esc(sub)}</b>"
+    lines = [f"{header} — tap to launch"]
+    if remaining and not has_more:
+        # Only reached when the name is too long for even the More button.
+        lines.append(f"… and {remaining} more. Use /run &lt;name&gt; or /list &lt;folder&gt;.")
+    lines += notes
+    return "\n".join(lines), builder.as_markup()
+
+
+@secure_router.message(Command("list", ignore_case=True))
+async def cmd_list(message: Message, command: CommandObject) -> None:
+    raw = (command.args or "").strip()
+    sub: str | None = None
+    if raw:
+        sub = validate_path(raw)
+        if sub is None:
+            await message.answer("⛔ Invalid folder name.")
+            return
+
+    names, notes, sub_found = collect_projects(sub)
+
+    if sub is not None and not sub_found:
+        await message.answer("\n".join([f"📁 Folder <b>{esc(sub)}</b> not found.", *notes]))
         return
 
-    if not best_mtime:
+    if not names:
         msg = "Folder is empty." if sub else "No projects yet."
         if notes:
             msg = "\n".join([msg, *notes])
         await message.answer(msg)
         return
 
-    # Most recently modified first, then turn each into a launch button. Button
-    # labels are plain text (no HTML parsing), so they are NOT escaped.
-    names = sorted(best_mtime, key=lambda n: best_mtime[n], reverse=True)
-    builder = InlineKeyboardBuilder()
-    shown = 0
-    hidden = 0
-    for name in names:
-        cb = f"ask:{name}"
-        if shown >= _LIST_BUTTONS_MAX or len(cb.encode()) > _CB_LIMIT:
-            hidden += 1
-            continue
-        # Only the last path segment: for /list <group> the group is already in
-        # the header, and the flat keyboard has no room for the full path.
-        builder.button(text=f"▶️ {name.rsplit('/', 1)[-1]}", callback_data=cb)
-        shown += 1
-    builder.adjust(1)
-
-    header = "📂 <b>Projects</b>" if sub is None else f"📂 <b>{esc(sub)}</b>"
-    lines = [f"{header} — tap to launch"]
-    if hidden:
-        lines.append(
-            f"… and {hidden} more (showing {shown} most recent). "
-            "Use /run &lt;name&gt; or /list &lt;folder&gt;."
-        )
-    lines += notes
-    await message.answer("\n".join(lines), reply_markup=builder.as_markup())
+    text, markup = render_list_page(names, notes, sub, 0)
+    await message.answer(text, reply_markup=markup)
 
 
 @secure_router.message(Command("favorite", "favorites", ignore_case=True))
@@ -607,6 +624,42 @@ async def cb_ask(callback: CallbackQuery) -> None:
             "limit and are not shown."
         )
     await callback.message.answer(text, reply_markup=builder.as_markup())
+
+
+@secure_router.callback_query(F.data.startswith("more:"))
+async def cb_more(callback: CallbackQuery) -> None:
+    """The "More" button on a /list page — edit the message in place to show the
+    next page. The list is re-collected fresh so it reflects the current disk
+    state rather than a snapshot from when the list was first sent."""
+    parts = (callback.data or "").split(":", 2)
+    if len(parts) < 2 or not (parts[1].isascii() and parts[1].isdigit()):
+        await callback.answer("Invalid button", show_alert=True)
+        return
+    offset = int(parts[1])
+    sub: str | None = None
+    if len(parts) == 3:
+        sub = validate_path(parts[2])
+        if sub is None:
+            await callback.answer("Invalid button", show_alert=True)
+            return
+
+    names, notes, sub_found = collect_projects(sub)
+    if (sub is not None and not sub_found) or not names:
+        await callback.answer("No projects here anymore", show_alert=True)
+        return
+    if offset >= len(names):
+        # The list shrank since the button was created — restart from the top.
+        offset = 0
+
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+    text, markup = render_list_page(names, notes, sub, offset)
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        # Message unchanged or too old to edit — nothing useful to do.
+        pass
 
 
 @secure_router.callback_query(F.data == "cancel")
